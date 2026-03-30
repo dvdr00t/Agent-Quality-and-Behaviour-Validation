@@ -12,6 +12,48 @@ The application exposes four cooperating roles:
 
 The supervisor routes customer requests to the most appropriate specialist and can combine multiple specialist answers before returning a final response.
 
+## Architecture diagram
+
+```mermaid
+flowchart TD
+    User[User via CLI or Chainlit] --> Entry[Application Entry Points]
+    Entry --> Main[`main.py` CLI]
+    Entry --> UI[`chainlit_app.py` UI]
+
+    Main --> Orchestrator[`RetailSupportOrchestrator`]
+    UI --> Orchestrator
+
+    Config[`SupportSettings`]
+    Provider[OpenAI or Azure OpenAI]
+    Session[`SupportSession`]
+    Service[`SupportOperationsService`]
+
+    Orchestrator --> Config
+    Config --> Provider
+    Orchestrator --> Session
+    Orchestrator --> Supervisor[Support Supervisor]
+
+    Supervisor --> Knowledge[Policy and Knowledge Specialist]
+    Supervisor --> Orders[Order Resolution Specialist]
+    Supervisor --> Safety[Trust and Safety Guardian]
+
+    Knowledge --> Service
+    Orders --> Service
+    Safety --> Service
+
+    Service --> KB[(Knowledge Base)]
+    Service --> OrderStore[(Orders Data)]
+    Service --> PolicyStore[(Policy Rules)]
+    Service --> Ticketing[(Escalation Tickets)]
+
+    Knowledge --> Response[Customer Response]
+    Orders --> Response
+    Safety --> Response
+    Supervisor --> Response
+```
+
+The runtime and session flow are implemented primarily in [`RetailSupportOrchestrator`](retail_support/runtime.py:41), [`SupportSession`](retail_support/runtime.py:27), and [`SupportOperationsService`](retail_support/services.py:12).
+
 ## Repository structure
 
 - [`main.py`](main.py) — CLI entrypoint
