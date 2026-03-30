@@ -16,43 +16,17 @@ The supervisor routes customer requests to the most appropriate specialist and c
 
 ```mermaid
 flowchart TD
-    User[User via CLI or Chainlit] --> Entry[Application Entry Points]
-    Entry --> Main[`main.py` CLI]
-    Entry --> UI[`chainlit_app.py` UI]
+    Supervisor[Support Supervisor]
+    Knowledge[Policy and Knowledge Specialist]
+    Orders[Order Resolution Specialist]
+    Safety[Trust and Safety Guardian]
 
-    Main --> Orchestrator[`RetailSupportOrchestrator`]
-    UI --> Orchestrator
-
-    Config[`SupportSettings`]
-    Provider[OpenAI or Azure OpenAI]
-    Session[`SupportSession`]
-    Service[`SupportOperationsService`]
-
-    Orchestrator --> Config
-    Config --> Provider
-    Orchestrator --> Session
-    Orchestrator --> Supervisor[Support Supervisor]
-
-    Supervisor --> Knowledge[Policy and Knowledge Specialist]
-    Supervisor --> Orders[Order Resolution Specialist]
-    Supervisor --> Safety[Trust and Safety Guardian]
-
-    Knowledge --> Service
-    Orders --> Service
-    Safety --> Service
-
-    Service --> KB[(Knowledge Base)]
-    Service --> OrderStore[(Orders Data)]
-    Service --> PolicyStore[(Policy Rules)]
-    Service --> Ticketing[(Escalation Tickets)]
-
-    Knowledge --> Response[Customer Response]
-    Orders --> Response
-    Safety --> Response
-    Supervisor --> Response
+    Supervisor -->|delegates policy, FAQ, and warranty requests| Knowledge
+    Supervisor -->|delegates order status, refunds, and escalation requests| Orders
+    Supervisor -->|delegates privacy, security, and risky requests| Safety
 ```
 
-The runtime and session flow are implemented primarily in [`RetailSupportOrchestrator`](retail_support/runtime.py:41), [`SupportSession`](retail_support/runtime.py:27), and [`SupportOperationsService`](retail_support/services.py:12).
+This view focuses only on the available agents and their delegation relationships inside the multi-agent system implemented by [`RetailSupportOrchestrator`](retail_support/runtime.py:41).
 
 ## Repository structure
 
