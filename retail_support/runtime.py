@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +45,9 @@ class SupportReply:
     handled_by: str
     route: list[str]
     tool_calls: list[str]
+
+
+TokenStreamCallback = Callable[[str], Awaitable[None]]
 
 
 class RetailSupportOrchestrator:
@@ -91,6 +95,43 @@ class RetailSupportOrchestrator:
         finally:
             self._active_session = None
 
+    async def reply_stream(
+        self,
+        session: SupportSession,
+        user_message: str,
+        target: str = "supervisor",
+        on_token: TokenStreamCallback | None = None,
+    ) -> SupportReply:
+        target = self._normalize_target(target)
+        self._current_request_events = []
+        self._active_session = session
+
+        try:
+            history = session.histories[target]
+            agent = self._get_agent(target)
+            answer = await self._ainvoke_agent(
+                agent=agent,
+                history=history,
+                user_message=user_message,
+                on_token=on_token,
+            )
+            route = self._build_route(target)
+            tool_calls = [
+                event["name"]
+                for event in self._current_request_events
+                if event["kind"] == "tool"
+            ]
+            handled_by = TARGET_DISPLAY_NAMES[target]
+            logger.info("Support request handled by %s with route=%s and tools=%s", handled_by, route, tool_calls)
+            return SupportReply(
+                text=answer,
+                handled_by=handled_by,
+                route=route,
+                tool_calls=tool_calls,
+            )
+        finally:
+            self._active_session = None
+
     def _build_model(self) -> ChatOpenAI | AzureChatOpenAI:
         if self.settings.provider == "azure":
             return AzureChatOpenAI(
@@ -101,6 +142,7 @@ class RetailSupportOrchestrator:
                 temperature=self.settings.temperature,
                 timeout=self.settings.request_timeout_seconds,
                 max_retries=self.settings.max_retries,
+                streaming=True,
             )
 
         return ChatOpenAI(
@@ -109,6 +151,7 @@ class RetailSupportOrchestrator:
             temperature=self.settings.temperature,
             timeout=self.settings.request_timeout_seconds,
             max_retries=self.settings.max_retries,
+            streaming=True,
         )
 
     def _build_agents(self) -> None:
@@ -245,6 +288,77 @@ class RetailSupportOrchestrator:
         history.append({"role": "user", "content": user_message})
         history.append({"role": "assistant", "content": answer})
         return answer
+
+    async def _ainvoke_agent(
+        self,
+        agent: Any,
+        history: list[dict[str, str]],
+        user_message: str,
+        on_token: TokenStreamCallback | None = None,
+    ) -> str:
+        payload = {
+            "messages": [
+                *history,
+                {"role": "user", "content": user_message},
+            ]
+        }
+        streamed_chunks: list[str] = []
+
+        try:
+            async for event in agent.astream(payload, stream_mode="messages"):
+                chunk, _metadata = self._split_stream_event(event)
+                text = self._extract_stream_text(chunk)
+                if not text:
+                    continue
+                streamed_chunks.append(text)
+                if on_token is not None:
+                    await on_token(text)
+        except (AttributeError, NotImplementedError, TypeError):
+            response = await agent.ainvoke(payload)
+            answer = self._extract_text(response)
+            if on_token is not None and answer:
+                await on_token(answer)
+        else:
+            answer = "".join(streamed_chunks).strip()
+            if not answer:
+                response = await agent.ainvoke(payload)
+                answer = self._extract_text(response)
+                if on_token is not None and answer:
+                    await on_token(answer)
+
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": answer})
+        return answer
+
+    def _split_stream_event(self, event: Any) -> tuple[Any, dict[str, Any]]:
+        if isinstance(event, tuple) and len(event) == 2 and isinstance(event[1], dict):
+            return event[0], event[1]
+        return event, {}
+
+    def _extract_stream_text(self, chunk: Any) -> str:
+        if isinstance(chunk, str):
+            return chunk
+
+        content = getattr(chunk, "content", None)
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                    continue
+                if "text" in item and isinstance(item["text"], str):
+                    text_parts.append(item["text"])
+            return "".join(part for part in text_parts if part)
+
+        return ""
 
     def _extract_text(self, response: Any) -> str:
         if isinstance(response, str):

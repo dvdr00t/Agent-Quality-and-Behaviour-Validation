@@ -5,7 +5,7 @@ from __future__ import annotations
 import chainlit as cl
 
 from retail_support.config import SupportSettings
-from retail_support.runtime import RetailSupportOrchestrator
+from retail_support.runtime import TARGET_DISPLAY_NAMES, RetailSupportOrchestrator
 
 
 AVAILABLE_TARGETS = {"supervisor", "knowledge", "orders", "safety"}
@@ -58,14 +58,19 @@ async def on_message(message: cl.Message) -> None:
         await cl.Message(author="System", content=f"Active target set to `{requested_target}`.").send()
         return
 
-    reply = await cl.make_async(orchestrator.reply)(
+    msg = cl.Message(author=TARGET_DISPLAY_NAMES.get(target, "Assistant"), content="")
+
+    reply = await orchestrator.reply_stream(
         session=support_session,
         user_message=content,
         target=target,
+        on_token=msg.stream_token,
     )
 
     footer = ""
     if target == "supervisor" and reply.route:
         footer = f"\n\n---\nRoute: {', '.join(reply.route)}"
 
-    await cl.Message(author=reply.handled_by, content=f"{reply.text}{footer}").send()
+    msg.author = reply.handled_by
+    msg.content = f"{reply.text}{footer}"
+    await msg.update()
