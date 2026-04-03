@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +14,14 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from retail_support.config import SupportSettings
 from retail_support.services import SupportOperationsService
+
+try:
+    from langfuse import Langfuse, propagate_attributes
+    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +42,7 @@ def _empty_histories() -> dict[str, list[dict[str, str]]]:
 class SupportSession:
     """Conversation state for a single customer interaction."""
 
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     histories: dict[str, list[dict[str, str]]] = field(default_factory=_empty_histories)
 
 
@@ -54,6 +64,8 @@ class RetailSupportOrchestrator:
         self.operations = SupportOperationsService()
         self._current_request_events: list[dict[str, Any]] = []
         self._active_session: SupportSession | None = None
+        self._active_callbacks: list[Any] = []
+        self._init_langfuse()
         self.model = self._build_model()
         self._build_agents()
 
@@ -69,27 +81,45 @@ class RetailSupportOrchestrator:
         target = self._normalize_target(target)
         self._current_request_events = []
         self._active_session = session
+        self._active_callbacks = self._create_langfuse_callbacks()
 
         try:
-            history = session.histories[target]
-            agent = self._get_agent(target)
-            answer = self._invoke_agent(agent=agent, history=history, user_message=user_message)
-            route = self._build_route(target)
-            tool_calls = [
-                event["name"]
-                for event in self._current_request_events
-                if event["kind"] == "tool"
-            ]
-            handled_by = TARGET_DISPLAY_NAMES[target]
-            logger.info("Support request handled by %s with route=%s and tools=%s", handled_by, route, tool_calls)
-            return SupportReply(
-                text=answer,
-                handled_by=handled_by,
-                route=route,
-                tool_calls=tool_calls,
-            )
+            if self._langfuse_enabled:
+                with propagate_attributes(
+                    session_id=session.session_id,
+                    trace_name=f"retail-support-{target}",
+                    metadata={"target": target},
+                ):
+                    return self._execute_reply(session, user_message, target)
+            else:
+                return self._execute_reply(session, user_message, target)
         finally:
             self._active_session = None
+            self._active_callbacks = []
+
+    def _execute_reply(
+        self,
+        session: SupportSession,
+        user_message: str,
+        target: str,
+    ) -> SupportReply:
+        history = session.histories[target]
+        agent = self._get_agent(target)
+        answer = self._invoke_agent(agent=agent, history=history, user_message=user_message)
+        route = self._build_route(target)
+        tool_calls = [
+            event["name"]
+            for event in self._current_request_events
+            if event["kind"] == "tool"
+        ]
+        handled_by = TARGET_DISPLAY_NAMES[target]
+        logger.info("Support request handled by %s with route=%s and tools=%s", handled_by, route, tool_calls)
+        return SupportReply(
+            text=answer,
+            handled_by=handled_by,
+            route=route,
+            tool_calls=tool_calls,
+        )
 
     def _build_model(self) -> ChatOpenAI | AzureChatOpenAI:
         if self.settings.provider == "azure":
@@ -233,13 +263,15 @@ class RetailSupportOrchestrator:
         return self._invoke_agent(agent=specialist, history=history, user_message=question)
 
     def _invoke_agent(self, agent: Any, history: list[dict[str, str]], user_message: str) -> str:
+        config = {"callbacks": self._active_callbacks} if self._active_callbacks else {}
         response = agent.invoke(
             {
                 "messages": [
                     *history,
                     {"role": "user", "content": user_message},
                 ]
-            }
+            },
+            config=config,
         )
         answer = self._extract_text(response)
         history.append({"role": "user", "content": user_message})
@@ -305,6 +337,23 @@ class RetailSupportOrchestrator:
             valid_targets = ", ".join(sorted(aliases))
             raise ValueError(f"Unsupported target '{target}'. Valid values: {valid_targets}")
         return normalized
+
+    def _init_langfuse(self) -> None:
+        self._langfuse_enabled = False
+        if not _LANGFUSE_AVAILABLE or not self.settings.langfuse_public_key:
+            return
+        Langfuse(
+            public_key=self.settings.langfuse_public_key,
+            secret_key=self.settings.langfuse_secret_key,
+            base_url=self.settings.langfuse_base_url,
+        )
+        self._langfuse_enabled = True
+        logger.info("Langfuse tracing enabled")
+
+    def _create_langfuse_callbacks(self) -> list[Any]:
+        if not self._langfuse_enabled:
+            return []
+        return [LangfuseCallbackHandler(public_key=self.settings.langfuse_public_key)]
 
     def _get_agent(self, target: str) -> Any:
         if target == "supervisor":

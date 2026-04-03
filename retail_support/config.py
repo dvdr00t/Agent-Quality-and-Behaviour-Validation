@@ -24,6 +24,9 @@ class SupportSettings:
     azure_openai_endpoint: str | None = None
     azure_openai_api_version: str | None = None
     azure_openai_deployment: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_public_key: str | None = None
+    langfuse_base_url: str | None = None
 
     @classmethod
     def from_env(cls, model_name_override: str | None = None) -> "SupportSettings":
@@ -31,6 +34,9 @@ class SupportSettings:
         temperature = _read_float("OPENAI_TEMPERATURE", 0.0)
         request_timeout_seconds = _read_float("OPENAI_TIMEOUT_SECONDS", 60.0)
         max_retries = _read_int("OPENAI_MAX_RETRIES", 2)
+        langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+        langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+        langfuse_base_url = os.getenv("LANGFUSE_BASE_URL")
 
         if provider == "azure":
             azure_openai_api_key = _read_required_env("AZURE_OPENAI_API_KEY")
@@ -52,6 +58,9 @@ class SupportSettings:
                 azure_openai_endpoint=azure_openai_endpoint,
                 azure_openai_api_version=azure_openai_api_version,
                 azure_openai_deployment=azure_openai_deployment,
+                langfuse_secret_key=langfuse_secret_key,
+                langfuse_public_key=langfuse_public_key,
+                langfuse_base_url=langfuse_base_url,
             )
 
         if provider != "openai":
@@ -65,6 +74,9 @@ class SupportSettings:
             request_timeout_seconds=request_timeout_seconds,
             max_retries=max_retries,
             openai_api_key=openai_api_key,
+            langfuse_secret_key=langfuse_secret_key,
+            langfuse_public_key=langfuse_public_key,
+            langfuse_base_url=langfuse_base_url,
         )
 
 
