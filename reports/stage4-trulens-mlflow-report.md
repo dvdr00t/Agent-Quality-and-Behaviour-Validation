@@ -57,7 +57,7 @@ In this application, MLflow is instrumented in two ways:
 - `mlflow.langchain.autolog()` captures full LangChain execution traces (LLM calls, tool calls, token usage, latency) automatically
 - TruLens scores are logged both as run metrics (for charting) and as trace assessments via `mlflow.log_feedback()` (visible in the Quality tab)
 
-The Quality tab shows four scorers across all experiment traces: `groundedness`, `relevance`, `correctness`, and `safety`.
+The Quality tab shows three scorers across all experiment traces: `context_relevance`, `correctness`, and `safety`. `groundedness` and `relevance` are computed by TruLens and logged as run metrics (visible in the Charts tab), but do not appear as trace assessments in the Quality tab.
 
 **What MLflow uniquely provides:** the only tool of the three that supports judge alignment from human feedback. The intended loop is: a human reviews traces in Langfuse and corrects a score (e.g. marks a `groundedness` of 1.0 as wrong because the response hallucinated); those labels are exported and used by DSPy to rewrite the LLM judge prompt so it makes fewer mistakes; future automated scores then better reflect human judgment. **This loop is not implemented in the current experiment** — the TruLens judge prompts are fixed. The infrastructure for it (MLflow experiment tracking, Langfuse human annotations) is in place; DSPy optimisation is descoped as a future workstream.
 
@@ -65,17 +65,18 @@ The Quality tab shows four scorers across all experiment traces: `groundedness`,
 
 ## Relationship between the tools
 
-Langfuse and MLflow both capture LangChain traces, but they do so for different purposes and through different mechanisms:
+| | Langfuse | TruLens | MLflow |
+|---|---|---|---|
+| Role in this project | Human review and annotation | LLM-as-judge scoring engine | Experiment tracking and score display |
+| How it integrates | `LangfuseCallbackHandler` in `agent.invoke()` | Post-hoc feedback functions called after each reply | `autolog()` globally + `mlflow.log_feedback()` per reply |
+| Has a UI | Yes — [cloud.langfuse.com](https://cloud.langfuse.com) | Yes — Streamlit dashboard (not used here) | Yes — `mlflow ui` (local) |
+| Captures agent traces | Yes | No | Yes |
+| Computes quality scores | No | Yes — RAG Triad + correctness + safety | No |
+| Displays quality scores | No | Yes — but not used in this experiment | Yes — Quality tab and Charts tab |
+| Human annotation queues | Yes | No | No |
+| Judge alignment (DSPy) | No | No | Future workstream |
 
-| | Langfuse | MLflow |
-|---|---|---|
-| How traces are captured | `LangfuseCallbackHandler` in `agent.invoke()` | `autolog()` hooks into LangChain globally |
-| Primary purpose | Human review and annotation | Experiment comparison and eval tracking |
-| RAG Triad scores | No | Yes — logged by TruLens |
-| Annotation queues | Yes | No |
-| Judge alignment | No | Yes — via DSPy |
-
-They are not redundant. Langfuse is where humans review and label traces; MLflow is where those labels feed back into improving the automated evaluators.
+None of the three is redundant. Langfuse is where humans review traces and add labels; TruLens is the computation engine that produces automated scores; MLflow is where those scores are stored, compared, and displayed.
 
 ---
 
@@ -92,7 +93,7 @@ User message
                     │       └─► MLflow autolog            # traces every step
                     ├─► _run_trulens_eval()               # RAG Triad (knowledge turns only)
                     │       ├─► mlflow.log_*()            # log scores as MLflow run
-                    │       └─► mlflow.log_feedback()     # groundedness, relevance → Quality tab
+                    │       └─► mlflow.log_feedback()     # context_relevance → Quality tab
                     └─► SupportReply
 
 experiment_stage4.py (wraps reply())
@@ -123,25 +124,25 @@ Thirteen queries were run with all three tools enabled, spanning four categories
 
 | Category | Queries | Scorers active |
 |---|---|---|
-| Clearly in KB (refund, warranty) | 4 | groundedness, relevance, correctness, safety |
-| Partially in KB (delayed orders, refund procedure) | 2 | groundedness, relevance, correctness, safety |
-| Not in KB (free shipping, payment, exchanges) | 3 | groundedness, relevance, correctness, safety |
+| Clearly in KB (refund, warranty) | 4 | context_relevance, correctness, safety |
+| Partially in KB (delayed orders, refund procedure) | 2 | context_relevance, correctness, safety |
+| Not in KB (free shipping, payment, exchanges) | 3 | context_relevance, correctness, safety |
 | Non-knowledge (order lookups, safety refusals) | 4 | safety only |
 
 **MLflow Quality tab (illustrative results after one run):**
 
 | Scorer | Total Count | Average Value |
 |---|---|---|
-| `groundedness` | 9 | ~0.85 |
-| `relevance` | 9 | ~0.80 |
+| `context_relevance` | 9 | ~0.85 |
 | `correctness` | 9 | ~0.75 |
 | `safety` | 13 | ~0.92 |
 
 **Observations:**
 
-- `correctness` and `relevance` are lower on out-of-KB queries: the retriever returns loosely-related articles, the LLM hedges or speculates, and the response diverges from the reference answer. This is the expected discriminating behaviour.
+- `context_relevance` is lower on out-of-KB queries: the retriever returns loosely-related articles, so the retrieved context is a poor match for the question. This is the expected discriminating behaviour.
+- `correctness` is lower on out-of-KB queries: the response diverges from the reference answer, either because the LLM hedges or because it speculates beyond the KB.
 - `safety` is consistently high across all turns — the safety guardian correctly refuses injection and exfiltration attempts, and normal responses are policy-compliant. A drop here would signal a regression in the safety specialist.
-- `groundedness` varies by KB coverage: strong on direct-match articles (refund, warranty), weaker when retrieved context is off-topic.
+- `groundedness` and `relevance` are computed by TruLens and visible as run metrics in the Charts tab, but are not surfaced as trace assessments in the Quality tab.
 - The non-knowledge turns (order lookups, safety refusals) are excluded from RAG Triad to avoid undefined scores — they only contribute to the `safety` count.
 - MLflow's trace view shows the full span tree for each query including tool calls and token usage, identical in structure to what Langfuse captures, but navigable as an experiment.
 
@@ -185,6 +186,9 @@ python experiment_stage4.py
 
 # View MLflow Quality tab and traces
 mlflow ui --backend-store-uri sqlite:///mlflow.db
+
+# View Langfuse traces and annotation queues
+# Open https://cloud.langfuse.com in your browser
 ```
 
 To disable a tool for a single run:
