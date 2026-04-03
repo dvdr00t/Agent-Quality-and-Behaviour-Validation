@@ -59,7 +59,7 @@ In this application, MLflow is instrumented in two ways:
 
 The Quality tab shows four scorers across all experiment traces: `groundedness`, `relevance`, `correctness`, and `safety`.
 
-**What MLflow uniquely provides:** the only tool of the three that supports judge alignment from human feedback, closing the loop between human judgment and automated evaluation.
+**What MLflow uniquely provides:** the only tool of the three that supports judge alignment from human feedback. The intended loop is: a human reviews traces in Langfuse and corrects a score (e.g. marks a `groundedness` of 1.0 as wrong because the response hallucinated); those labels are exported and used by DSPy to rewrite the LLM judge prompt so it makes fewer mistakes; future automated scores then better reflect human judgment. **This loop is not implemented in the current experiment** — the TruLens judge prompts are fixed. The infrastructure for it (MLflow experiment tracking, Langfuse human annotations) is in place; DSPy optimisation is descoped as a future workstream.
 
 ---
 
