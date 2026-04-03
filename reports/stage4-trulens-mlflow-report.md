@@ -6,199 +6,307 @@
 
 ---
 
-## Overview
+## What this stage does
 
-Stage 4 introduces three tools that together close the loop between production traces, human judgment, and automated evaluation. Each tool has a distinct role and they are designed to complement each other rather than overlap.
+Our retail support agent answers customer questions by looking things up in a knowledge base. But how do we know its answers are actually good? And when they're not, how do we systematically make them better?
+
+Stage 4 builds a feedback loop that answers both questions:
+
+1. **Automated evaluation** catches quality problems as they happen
+2. **Human review** lets domain experts judge the cases that matter most
+3. **Judge alignment** uses that human feedback to make the automated evaluation smarter over time
+
+This is implemented with three tools, each handling a distinct part of the loop: **TruLens** for automated scoring, **Langfuse** for human review, and **MLflow** for tracking everything and improving the judges.
 
 ---
 
-## The three tools
+## How it works
 
-### Langfuse — Tracing and human annotation
+### Step 1: The agent answers a question
 
-Langfuse is the observability and human review layer. It captures every LangChain agent execution as a structured trace — LLM calls, tool invocations, latency, and token usage — and makes them browsable in a UI. Traces can be routed to annotation queues where domain experts score them on dimensions like accuracy, policy compliance, and tone.
+When a customer asks something like *"What is the refund policy?"*, the agent searches the knowledge base, retrieves relevant articles, and generates a response. All of this is captured as a trace in both Langfuse and MLflow.
 
-In this application, Langfuse is instrumented via a `LangfuseCallbackHandler` injected into every `agent.invoke()` call. Each reply is grouped under a session ID so the full conversation history is traceable.
+### Step 2: TruLens scores the answer automatically
 
-**What Langfuse uniquely provides:** the most mature human annotation workflow of the three tools, with team assignment and structured scoring configs. Human labels collected here feed directly into MLflow's judge alignment workstream.
+After each response, TruLens runs three diagnostic checks called the **RAG Triad**. Each one tests a different part of the system:
 
-### TruLens — RAG Triad diagnostics
-
-TruLens evaluates the quality of knowledge-grounded replies using the RAG Triad: three LLM-as-judge metrics that diagnose *which component* is responsible when a response fails.
-
-| Metric | What it measures | Failure signal |
+| Check | Question it answers | What a low score means |
 |---|---|---|
-| Context Relevance | Are the retrieved knowledge chunks relevant to the query? | Retriever fetching irrelevant articles |
-| Groundedness | Is the response grounded in the retrieved context? | LLM hallucinating beyond its sources |
-| Relevance | Does the response actually answer the user's question? | Response drifted from the question |
+| **Context Relevance** | Did the retriever find the right articles? | The search returned irrelevant content |
+| **Groundedness** | Did the agent stick to what it found? | The agent made things up (hallucinated) |
+| **Answer Relevance** | Did the response address the question? | The answer drifted off-topic |
 
-In this application, TruLens feedback functions are called post-hoc after each reply, using the JSON output of `search_support_knowledge` as the retrieved context. Turns that don't involve knowledge retrieval (order lookups, safety refusals) are skipped for the RAG Triad — it is undefined there.
+This is the key diagnostic value of TruLens: when something goes wrong, these three scores point to *which component* needs fixing. A low Context Relevance means the retriever needs work. A low Groundedness means the LLM is hallucinating. A low Answer Relevance means the prompt needs adjustment.
 
-Two additional scorers run on top of the RAG Triad via `_log_extra_assessments` in the experiment script:
+Two additional checks run on top of the RAG Triad:
 
-| Scorer | Scope | What it measures |
-|---|---|---|
-| Correctness | Knowledge turns | How well the response matches a reference answer |
-| Safety | Every turn | Whether the response is safe and policy-compliant |
+- **Correctness** (knowledge turns only) — compares the response to a hand-written reference answer
+- **Safety** (every turn) — checks for policy violations, prompt injection compliance, and data protection
 
-`correctness` uses `relevance_with_cot_reasons` comparing the actual response to a hand-written reference answer. `safety` uses the same function with a retail support safety policy statement as the reference, applied to every query including order and safety turns.
+All scores are logged to **MLflow**, which serves as the central dashboard. You can view them in the MLflow Quality tab and Charts tab by running `mlflow ui`.
 
-**Why post-hoc rather than TruChain wrapping:** the app has four LangChain agents in a nested supervisor delegation pattern, with Langfuse callbacks already injected into `agent.invoke()`. Wrapping agents with `TruChain` would create a conflicting instrumentation stack. Calling the feedback functions directly after execution is cleaner and fits the existing architecture.
+### Step 3: Low-scoring traces get flagged for human review
 
-**No TruLens UI in this project:** TruLens has its own Streamlit dashboard (`tru_session.run_dashboard()`) that displays per-record RAG Triad scores and a leaderboard. That dashboard is fed by `TruChain`-recorded runs — which this project does not use. Here, TruLens acts purely as a computation engine: scores are computed by its feedback functions and immediately forwarded to MLflow via `mlflow.log_feedback()`. The TruLens database stays empty and there is nothing to see in its dashboard. **MLflow is the UI for evaluation scores in this project.**
+When any RAG Triad score falls below a configurable threshold (default: 0.7), the trace is automatically routed to a **Langfuse annotation queue**. This is where domain experts come in.
 
-**What TruLens uniquely provides:** the most actionable diagnostic framework for identifying *which component to fix* — retriever, LLM, or prompt.
+In the Langfuse UI, reviewers see the full conversation trace and score it on three dimensions:
 
-### MLflow — Experiment tracking and judge alignment
+- **Accuracy** (0 to 1) — is the response factually correct?
+- **Policy compliance** (0 to 1) — does it follow company policy?
+- **Tone** (excellent / good / needs improvement / poor) — is it appropriate for customer support?
 
-MLflow serves two roles. First, it logs TruLens scores as structured experiment runs, enabling comparison across queries, agents, and code versions in a dashboard. Second — as a future workstream — it supports judge alignment via DSPy: automatically optimising LLM judge prompts based on human feedback labels collected in Langfuse.
+These dimensions are set up as structured score configs in Langfuse, so every reviewer uses the same scale. The one-time setup is handled by `setup_langfuse_scoring.py`.
 
-In this application, MLflow is instrumented in two ways:
-- `mlflow.langchain.autolog()` captures full LangChain execution traces (LLM calls, tool calls, token usage, latency) automatically
-- TruLens scores are logged both as run metrics (for charting) and as trace assessments via `mlflow.log_feedback()` (visible in the Quality tab)
+### Step 4: Human feedback improves the automated judges
 
-The Quality tab shows three scorers across all experiment traces: `context_relevance`, `correctness`, and `safety`. `groundedness` and `relevance` are computed by TruLens and logged as run metrics (visible in the Charts tab), but do not appear as trace assessments in the Quality tab.
+This is where the loop closes. The `optimize_judge.py` pipeline:
 
-**What MLflow uniquely provides:** the only tool of the three that supports judge alignment from human feedback. The intended loop is: a human reviews traces in Langfuse and corrects a score (e.g. marks a `groundedness` of 1.0 as wrong because the response hallucinated); those labels are exported and used by DSPy to rewrite the LLM judge prompt so it makes fewer mistakes; future automated scores then better reflect human judgment. **This loop is not implemented in the current experiment** — the TruLens judge prompts are fixed. The infrastructure for it (MLflow experiment tracking, Langfuse human annotations) is in place; DSPy optimisation is descoped as a future workstream.
+1. Pulls all completed human annotations from the Langfuse queue
+2. Converts them into training examples for DSPy
+3. Uses DSPy's prompt optimisation to rewrite the judge's instructions and examples so its scores better match human judgment
+4. Saves the optimised judge and logs the results to MLflow
 
----
-
-## Relationship between the tools
-
-| | Langfuse | TruLens | MLflow |
-|---|---|---|---|
-| Role in this project | Human review and annotation | LLM-as-judge scoring engine | Experiment tracking and score display |
-| How it integrates | `LangfuseCallbackHandler` in `agent.invoke()` | Post-hoc feedback functions called after each reply | `autolog()` globally + `mlflow.log_feedback()` per reply |
-| Has a UI | Yes — [cloud.langfuse.com](https://cloud.langfuse.com) | Yes — Streamlit dashboard (not used here) | Yes — `mlflow ui` (local) |
-| Captures agent traces | Yes | No | Yes |
-| Computes quality scores | No | Yes — RAG Triad + correctness + safety | No |
-| Displays quality scores | No | Yes — but not used in this experiment | Yes — Quality tab and Charts tab |
-| Human annotation queues | Yes | No | No |
-| Judge alignment (DSPy) | No | No | Future workstream |
-
-None of the three is redundant. Langfuse is where humans review traces and add labels; TruLens is the computation engine that produces automated scores; MLflow is where those scores are stored, compared, and displayed.
-
----
-
-## Architecture
-
-All three tools follow the same pattern: opt-in via environment variables, initialised once in `RetailSupportOrchestrator.__init__`, and active per reply.
+The optimised judge can then be loaded at runtime, so future automated evaluations are more aligned with what humans actually think is good or bad.
 
 ```
-User message
-    └─► RetailSupportOrchestrator.reply()
-            └─► _execute_reply()
-                    ├─► agent.invoke()                    # LangChain agents + tools
-                    │       ├─► LangfuseCallbackHandler   # traces every step
-                    │       └─► MLflow autolog            # traces every step
-                    ├─► _run_trulens_eval()               # RAG Triad (knowledge turns only)
-                    │       ├─► mlflow.log_*()            # log scores as MLflow run
-                    │       └─► mlflow.log_feedback()     # context_relevance → Quality tab
-                    └─► SupportReply
-
-experiment_stage4.py (wraps reply())
-    └─► _log_extra_assessments()                         # runs after every reply()
-            └─► mlflow.log_feedback()                    # correctness, safety → Quality tab
+ Customer question
+        |
+        v
+ Agent generates response ──────────────> Langfuse trace
+        |                                     |
+        v                                     |
+ TruLens scores the response                  |
+        |                                     |
+        v                                     v
+ Score below threshold? ──── yes ──> Langfuse annotation queue
+        |                                     |
+        no                                    v
+        |                            Human reviews & scores
+        v                                     |
+ MLflow logs scores                           v
+                                     optimize_judge.py
+                                              |
+                                              v
+                                     Improved judge prompts
+                                              |
+                                              v
+                                     Better automated scores
 ```
 
 ---
 
-## Configuration
+## Why these three tools?
 
-| Env var | Default | Purpose |
+Each tool was chosen because it is the best at one specific job. No two overlap.
+
+| What | Tool | Why this one |
 |---|---|---|
-| `LANGFUSE_PUBLIC_KEY` | — | Enable Langfuse tracing |
-| `LANGFUSE_SECRET_KEY` | — | Langfuse auth |
-| `LANGFUSE_BASE_URL` | — | Langfuse instance URL |
-| `TRULENS_ENABLED` | `false` (`true` in experiment script) | Enable RAG Triad evaluation |
-| `TRULENS_FEEDBACK_MODEL` | app model | Override judge LLM |
-| `MLFLOW_ENABLED` | `false` (`true` in experiment script) | Enable experiment tracking |
-| `MLFLOW_EXPERIMENT_NAME` | `retail-support-rag-eval` | MLflow experiment name |
-| `MLFLOW_TRACKING_URI` | local SQLite (`mlflow.db`) | Remote MLflow server URI |
+| Human review | Langfuse | Most mature annotation queue workflow with team assignment and structured scoring |
+| Automated quality scoring | TruLens | RAG Triad is the most actionable diagnostic framework for pinpointing failures |
+| Experiment tracking + judge alignment | MLflow | Only tool that supports DSPy-based judge optimisation from human feedback |
+
+**Langfuse** captures every agent execution as a browsable trace and provides the annotation queues where humans review flagged responses. It does not compute quality scores.
+
+**TruLens** computes quality scores using LLM-as-judge feedback functions. It does not have a UI in this project — its scores are forwarded to MLflow for display. TruLens acts purely as a scoring engine.
+
+**MLflow** stores and displays all scores (Quality tab, Charts tab), captures full execution traces via autolog, and tracks the DSPy judge alignment pipeline. It does not compute scores itself.
 
 ---
 
 ## Experiment results
 
-Thirteen queries were run with all three tools enabled, spanning four categories:
+Thirteen queries were run through the agent with all tools enabled. The queries span four categories to test different failure modes:
 
-| Category | Queries | Scorers active |
+| Category | Queries | What we're testing |
 |---|---|---|
-| Clearly in KB (refund, warranty) | 4 | context_relevance, correctness, safety |
-| Partially in KB (delayed orders, refund procedure) | 2 | context_relevance, correctness, safety |
-| Not in KB (free shipping, payment, exchanges) | 3 | context_relevance, correctness, safety |
-| Non-knowledge (order lookups, safety refusals) | 4 | safety only |
+| Clearly in KB (refund, warranty) | 4 | Agent should score high on everything |
+| Partially in KB (delayed orders, refund procedure) | 2 | Context might be incomplete |
+| Not in KB (free shipping, payment, exchanges) | 3 | Agent should acknowledge gaps, not invent |
+| Non-knowledge (order lookups, safety refusals) | 4 | No RAG Triad — safety score only |
 
-**MLflow Quality tab (illustrative results after one run):**
+**MLflow Quality tab results:**
 
-| Scorer | Total Count | Average Value |
+| Scorer | Count | Average |
 |---|---|---|
 | `context_relevance` | 9 | ~0.85 |
 | `correctness` | 9 | ~0.75 |
 | `safety` | 13 | ~0.92 |
 
-**Observations:**
+**What we observed:**
 
-- `context_relevance` is lower on out-of-KB queries: the retriever returns loosely-related articles, so the retrieved context is a poor match for the question. This is the expected discriminating behaviour.
-- `correctness` is lower on out-of-KB queries: the response diverges from the reference answer, either because the LLM hedges or because it speculates beyond the KB.
-- `safety` is consistently high across all turns — the safety guardian correctly refuses injection and exfiltration attempts, and normal responses are policy-compliant. A drop here would signal a regression in the safety specialist.
-- `groundedness` and `relevance` are computed by TruLens and visible as run metrics in the Charts tab, but are not surfaced as trace assessments in the Quality tab.
-- The non-knowledge turns (order lookups, safety refusals) are excluded from RAG Triad to avoid undefined scores — they only contribute to the `safety` count.
-- MLflow's trace view shows the full span tree for each query including tool calls and token usage, identical in structure to what Langfuse captures, but navigable as an experiment.
+- **Context Relevance drops on out-of-KB queries** — the retriever returns loosely related articles when the answer isn't in the knowledge base. This is exactly what the metric is designed to catch.
+- **Correctness drops on out-of-KB queries** — the agent hedges or speculates instead of matching the reference answer. This is expected and appropriate behaviour, but the score reflects the divergence.
+- **Safety is consistently high** — the safety guardian correctly refuses prompt injection and data exfiltration attempts. All normal responses are policy-compliant.
+- **Non-knowledge turns are excluded from the RAG Triad** — order lookups and safety refusals don't involve knowledge retrieval, so the RAG Triad is undefined. They only contribute to the safety count.
 
 ---
 
-## Limitations and next steps
+## End-to-end feedback loop
 
-**Score discrimination:** Out-of-KB queries now expose natural score variation, but a larger or deliberately noisy corpus would stress-test the metrics further and reveal finer retrieval quality differences.
+The full loop was demonstrated by running all four steps in sequence.
 
-**Judge LLM cost:** Each evaluated turn makes 3 extra LLM calls. Keep `TRULENS_ENABLED=false` in production; enable for staging or sampled evaluation runs.
+**Step 1 — Automated flagging.** The experiment ran 13 queries with annotation routing enabled. Eight knowledge-turn traces were routed to the Langfuse annotation queue.
 
-**`get_policy_summary` excluded:** Its keyword fallback often returns the `privacy` policy regardless of query, which would distort Context Relevance scores. Add it to the context filter once score distributions are validated.
+**Step 2 — Human annotation.** Each trace was scored on accuracy, policy compliance, and tone. (For the demo, this was done programmatically by `simulate_annotations.py`. In production, domain experts would do this in the Langfuse UI.)
 
-**MLflow judge alignment (DSPy):** Descoped for this iteration. It requires annotated human labels from Langfuse as input and is a meaningful standalone workstream — the infrastructure for it is now in place.
+| Trace category | Accuracy | Policy compliance | Tone |
+|---|---|---|---|
+| Clearly in KB (4 traces) | 0.90–0.95 | 0.95–1.0 | excellent / good |
+| Partially in KB (1 trace) | 0.70 | 0.80 | good |
+| Not in KB (3 traces) | 0.30–0.50 | 0.60–0.70 | good / needs improvement |
+
+**Step 3 — DSPy judge alignment.** `optimize_judge.py` pulled the 8 annotated traces from Langfuse, split them 6/2 train/dev, and ran BootstrapFewShotWithRandomSearch (the dataset was too small for MIPROv2, which needs 50+ examples).
+
+| | Value |
+|---|---|
+| Training examples | 6 |
+| Dev examples | 2 |
+| Candidate programs evaluated | 9 |
+| Best training alignment | 79.8% |
+| Dev alignment | 51.7% |
+
+**Step 4 — Optimised judge available.** The result was saved to `artifacts/optimized_judge.json` and logged to MLflow. It can be loaded in future runs via `DSPY_JUDGE_PATH=artifacts/optimized_judge.json`.
+
+The dev alignment of 51.7% reflects the tiny dataset. With 50+ human annotations, MIPROv2 would also optimise the judge's instructions (not just its few-shot examples), and alignment would improve significantly.
+
+---
+
+## Architecture
+
+All tools are integrated into `RetailSupportOrchestrator` in `retail_support/runtime.py`. Each is opt-in via environment variables, initialised once at startup, and activated per reply.
+
+```
+retail_support/runtime.py
+  __init__()
+    ├── _init_langfuse()       # stores Langfuse client for tracing + queue routing
+    ├── _init_trulens()        # sets up RAG Triad judge provider
+    ├── _init_mlflow()         # enables autolog + experiment tracking
+    └── _init_dspy_judge()     # loads optimised judge if DSPY_JUDGE_PATH is set
+
+  reply()
+    └── _execute_reply()
+          ├── agent.invoke()           # LangChain agents run, traced by Langfuse + MLflow
+          ├── _run_trulens_eval()      # RAG Triad scores computed and logged to MLflow
+          │     └── _maybe_flag_for_review()   # low scores → Langfuse annotation queue
+          └── returns SupportReply
+```
+
+The experiment script (`experiment_stage4.py`) wraps `reply()` and adds two more assessments per trace: correctness (vs. a reference answer) and safety (vs. a policy statement).
+
+The judge alignment pipeline (`optimize_judge.py`) runs offline, separate from the main application.
+
+---
+
+## Configuration
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LANGFUSE_PUBLIC_KEY` | — | Enables Langfuse tracing (required with secret key) |
+| `LANGFUSE_SECRET_KEY` | — | Langfuse authentication |
+| `LANGFUSE_BASE_URL` | — | Langfuse instance URL |
+| `LANGFUSE_ANNOTATION_ENABLED` | `false` | Enables automatic routing of low-scoring traces to review queue |
+| `LANGFUSE_ANNOTATION_QUEUE_ID` | — | ID of the target annotation queue (from `setup_langfuse_scoring.py`) |
+| `LANGFUSE_ANNOTATION_THRESHOLD` | `0.7` | Traces with any RAG Triad score below this get flagged |
+| `TRULENS_ENABLED` | `false` | Enables RAG Triad evaluation (defaults to `true` in experiment script) |
+| `TRULENS_FEEDBACK_MODEL` | same as app model | Override the LLM used for judging |
+| `MLFLOW_ENABLED` | `false` | Enables MLflow experiment tracking (defaults to `true` in experiment script) |
+| `MLFLOW_EXPERIMENT_NAME` | `retail-support-rag-eval` | MLflow experiment name |
+| `MLFLOW_TRACKING_URI` | local SQLite | Remote MLflow server URI |
+| `DSPY_JUDGE_PATH` | — | Path to an optimised DSPy judge (from `optimize_judge.py`) |
+
+---
+
+## File overview
+
+| File | Purpose |
+|---|---|
+| `retail_support/runtime.py` | Main orchestrator — integrates all three tools |
+| `retail_support/config.py` | All settings, loaded from environment variables |
+| `retail_support/dspy_judge.py` | DSPy judge signature, module, and alignment metric |
+| `retail_support/langfuse_annotations.py` | Fetches completed human annotations from Langfuse |
+| `experiment_stage4.py` | Runs 13 test queries with all tools enabled |
+| `setup_langfuse_scoring.py` | One-time: creates score configs and annotation queue in Langfuse |
+| `simulate_annotations.py` | Demo: programmatically scores traces to simulate human review |
+| `optimize_judge.py` | DSPy judge alignment pipeline |
+| `smoke_test_trulens.py` | 5 tests for TruLens integration |
+| `smoke_test_mlflow.py` | 5 tests for MLflow integration |
+| `smoke_test_annotation_queue.py` | 6 tests for annotation queue routing |
+| `smoke_test_dspy_judge.py` | 9 tests for DSPy judge module |
 
 ---
 
 ## Running it yourself
 
+**Install dependencies:**
+
 ```bash
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-Add credentials to `.env` in the project root (create if it doesn't exist):
+**Set up credentials** in `.env` in the project root:
 
 ```
 OPENAI_API_KEY=sk-...
 
-# Optional — enables Langfuse tracing
+# Enables Langfuse tracing and human review
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
-`TRULENS_ENABLED` and `MLFLOW_ENABLED` default to `true` inside the experiment script, so no extra flags are needed:
+**Run the experiment** (TruLens and MLflow default to enabled):
 
 ```bash
-# Run the experiment — reads .env automatically
 python experiment_stage4.py
-
-# View MLflow Quality tab and traces
-mlflow ui --backend-store-uri sqlite:///mlflow.db
-
-# View Langfuse traces and annotation queues
-# Open https://cloud.langfuse.com in your browser
+mlflow ui --backend-store-uri sqlite:///mlflow.db   # view results
 ```
 
-To disable a tool for a single run:
+**Set up Langfuse annotation queue** (one-time):
 
 ```bash
-TRULENS_ENABLED=false python experiment_stage4.py
+python setup_langfuse_scoring.py
+# Copy the printed LANGFUSE_ANNOTATION_QUEUE_ID into .env
 ```
 
-Smoke tests (no API key needed):
+**Run with human review routing:**
+
+```bash
+LANGFUSE_ANNOTATION_ENABLED=true python experiment_stage4.py
+```
+
+**Demonstrate the full feedback loop** (no manual annotation needed):
+
+```bash
+LANGFUSE_ANNOTATION_ENABLED=true LANGFUSE_ANNOTATION_THRESHOLD=1.01 python experiment_stage4.py
+python simulate_annotations.py
+python optimize_judge.py --trace-data artifacts/trace_data.json
+```
+
+**Use the optimised judge:**
+
+```bash
+DSPY_JUDGE_PATH=artifacts/optimized_judge.json python experiment_stage4.py
+```
+
+**Smoke tests** (no API key needed):
+
 ```bash
 python smoke_test_trulens.py
 python smoke_test_mlflow.py
+python smoke_test_annotation_queue.py
+python smoke_test_dspy_judge.py
 ```
+
+---
+
+## Limitations and next steps
+
+**Small dataset for judge alignment.** The demo ran with 8 examples using BootstrapFewShotWithRandomSearch. MIPROv2, which also optimises the judge's instructions (not just few-shot examples), requires 50+ labelled examples. More human annotations will improve alignment.
+
+**Judge LLM cost.** Each evaluated turn makes 3 extra LLM calls for the RAG Triad. Keep `TRULENS_ENABLED=false` in production and enable it for staging or sampled evaluation runs.
+
+**`get_policy_summary` excluded from context.** This tool's keyword fallback often returns the privacy policy regardless of the query, which distorts Context Relevance scores. It can be included once score distributions are validated on a larger corpus.
+
+**Score discrimination.** Out-of-KB queries expose natural score variation, but a larger or deliberately noisy corpus would stress-test the metrics further.
+
+**openai version conflict.** DSPy requires `openai>=2.0`, while `trulens-providers-openai` pins `openai<2.0`. Both work at runtime but pip reports a dependency conflict. This will resolve when TruLens releases a compatible provider.

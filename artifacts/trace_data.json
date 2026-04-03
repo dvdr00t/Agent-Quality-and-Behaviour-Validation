@@ -1,0 +1,42 @@
+{
+  "092ed38d8d8cfe54ef76b91d047af0fa": {
+    "query": "What is the refund policy?",
+    "response": "Customers can return non-final-sale items within 30 days of delivery with a customer ID and order ID.",
+    "context": "Refund policy: non-final-sale items can be returned within 30 days of delivery. Customer ID and order ID required."
+  },
+  "ad70263cf8f383774e9198c6df40c7f5": {
+    "query": "Can I return a final sale item?",
+    "response": "No, items marked as final sale cannot be refunded.",
+    "context": "Final sale items are non-refundable."
+  },
+  "09e2b8263bb8d7dcf7d73dbc372a6277": {
+    "query": "What is the warranty for refurbished devices?",
+    "response": "Refurbished devices carry a 90-day limited warranty covering hardware defects but not accidental damage or software issues.",
+    "context": "Refurbished devices: 90-day limited warranty, covers hardware defects, excludes accidental damage and software issues."
+  },
+  "23d6dfa0d8edf18e0449836244a0cd7e": {
+    "query": "Does the device warranty cover accidental damage?",
+    "response": "No, the warranty explicitly excludes accidental damage.",
+    "context": "Warranty exclusions: accidental damage, software issues."
+  },
+  "01df632fb03ac04b7eb0bd3b926c8917": {
+    "query": "What happens if my order is delayed?",
+    "response": "Delayed orders can be escalated to a human support queue for further assistance.",
+    "context": "Escalation: delayed orders can be escalated to human support."
+  },
+  "3a63c8c35653a65ca9c50b3acf89bd67": {
+    "query": "Do you offer free shipping?",
+    "response": "I do not have specific information about free shipping in our knowledge base.",
+    "context": "Shipping policy: standard and express options available."
+  },
+  "ab8e29982418451b320ec911e0de5ee5": {
+    "query": "What payment methods do you accept?",
+    "response": "I do not have information about accepted payment methods in our knowledge base.",
+    "context": "No payment method information in KB."
+  },
+  "3d3e6f7444305f39261734e5c5e9ea8f": {
+    "query": "Can I exchange a product instead of returning it?",
+    "response": "I do not have specific information about product exchanges. Refunds are supported within 30 days.",
+    "context": "Refund policy covers returns but does not mention exchanges."
+  }
+}

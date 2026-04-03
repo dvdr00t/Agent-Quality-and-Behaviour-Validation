@@ -84,6 +84,7 @@ class RetailSupportOrchestrator:
         self._init_langfuse()
         self._init_trulens()
         self._init_mlflow()
+        self._init_dspy_judge()
         self.model = self._build_model()
         self._build_agents()
 
@@ -108,8 +109,14 @@ class RetailSupportOrchestrator:
                     trace_name=f"retail-support-{target}",
                     metadata={"target": target},
                 ):
-                    return self._execute_reply(session, user_message, target)
+                    with self._langfuse_client.start_as_current_observation(
+                        name=f"retail-support-{target}",
+                        metadata={"target": target},
+                    ):
+                        self._langfuse_trace_id = self._langfuse_client.get_current_trace_id()
+                        return self._execute_reply(session, user_message, target)
             else:
+                self._langfuse_trace_id = None
                 return self._execute_reply(session, user_message, target)
         finally:
             self._active_session = None
@@ -371,9 +378,10 @@ class RetailSupportOrchestrator:
 
     def _init_langfuse(self) -> None:
         self._langfuse_enabled = False
+        self._langfuse_client: Any = None
         if not _LANGFUSE_AVAILABLE or not self.settings.langfuse_public_key:
             return
-        Langfuse(
+        self._langfuse_client = Langfuse(
             public_key=self.settings.langfuse_public_key,
             secret_key=self.settings.langfuse_secret_key,
             base_url=self.settings.langfuse_base_url,
@@ -464,6 +472,7 @@ class RetailSupportOrchestrator:
                         ar_score=ar_score,
                         ar_reasons=ar_reasons,
                     )
+            self._maybe_flag_for_review(cr_score=cr_score, gr_score=gr_score, ar_score=ar_score)
         except Exception:
             logger.exception("TruLens evaluation failed — continuing without scores")
 
@@ -516,6 +525,101 @@ class RetailSupportOrchestrator:
             logger.info("MLflow trace assessments logged for trace %s", trace_id)
         except Exception:
             logger.exception("Failed to log MLflow trace assessments — continuing without")
+
+    def _maybe_flag_for_review(
+        self,
+        cr_score: float,
+        gr_score: float,
+        ar_score: float,
+    ) -> None:
+        """Route low-scoring traces to a Langfuse annotation queue for human review."""
+        if not self.settings.langfuse_annotation_enabled:
+            return
+        if not self._langfuse_client or not self.settings.langfuse_annotation_queue_id:
+            return
+        if min(cr_score, gr_score, ar_score) >= self.settings.langfuse_annotation_threshold:
+            return
+        try:
+            trace_id = getattr(self, "_langfuse_trace_id", None)
+            if not trace_id:
+                logger.warning("No active Langfuse trace — cannot flag for review")
+                return
+            self._langfuse_client.api.annotation_queues.create_queue_item(
+                queue_id=self.settings.langfuse_annotation_queue_id,
+                object_id=trace_id,
+                object_type="TRACE",
+            )
+            logger.info(
+                "Trace %s flagged for human review (min score %.2f < %.2f)",
+                trace_id,
+                min(cr_score, gr_score, ar_score),
+                self.settings.langfuse_annotation_threshold,
+            )
+        except Exception:
+            logger.exception("Failed to add trace to annotation queue — continuing")
+
+    def _init_dspy_judge(self) -> None:
+        """Load an optimized DSPy judge program if DSPY_JUDGE_PATH is configured."""
+        self._dspy_judge_enabled = False
+        self._dspy_judge: Any = None
+        judge_path = self.settings.dspy_judge_path
+        if not judge_path:
+            return
+        try:
+            import dspy
+
+            from retail_support.dspy_judge import RetailJudgeModule
+
+            self._dspy_judge = RetailJudgeModule()
+            self._dspy_judge.load(judge_path)
+            self._dspy_judge_enabled = True
+            logger.info("DSPy optimized judge loaded from %s", judge_path)
+        except ImportError:
+            logger.warning("dspy or retail_support.dspy_judge not installed — skipping DSPy judge")
+        except Exception:
+            logger.exception("Failed to load DSPy judge from %s — falling back to TruLens", judge_path)
+
+    def _run_dspy_eval(
+        self,
+        query: str,
+        context_chunks: list[str],
+        response: str,
+        target: str = "",
+        trace_id: str | None = None,
+    ) -> None:
+        """Evaluate using the optimized DSPy judge and log results to MLflow."""
+        if not self._dspy_judge_enabled or not context_chunks:
+            return
+        try:
+            context_str = "\n\n---\n\n".join(context_chunks)
+            pred = self._dspy_judge(query=query, context=context_str, response=response)
+            accuracy = float(pred.accuracy)
+            policy_compliance = float(pred.policy_compliance)
+            tone = str(pred.tone).strip().lower()
+            logger.info(
+                "DSPy judge — accuracy=%.2f policy_compliance=%.2f tone=%s",
+                accuracy,
+                policy_compliance,
+                tone,
+            )
+            if self._mlflow_enabled:
+                with mlflow.start_run():
+                    mlflow.log_param("query", query[:256])
+                    mlflow.log_param("target_agent", target)
+                    mlflow.log_metric("dspy_accuracy", accuracy)
+                    mlflow.log_metric("dspy_policy_compliance", policy_compliance)
+                    mlflow.log_param("dspy_tone", tone)
+                if trace_id:
+                    from mlflow.entities import AssessmentSource, AssessmentSourceType
+
+                    source = AssessmentSource(
+                        source_type=AssessmentSourceType.LLM_JUDGE,
+                        source_id="dspy/optimized-judge",
+                    )
+                    mlflow.log_feedback(trace_id=trace_id, name="dspy_accuracy", value=accuracy, source=source)
+                    mlflow.log_feedback(trace_id=trace_id, name="dspy_policy_compliance", value=policy_compliance, source=source)
+        except Exception:
+            logger.exception("DSPy judge evaluation failed — continuing without scores")
 
     def _get_agent(self, target: str) -> Any:
         if target == "supervisor":

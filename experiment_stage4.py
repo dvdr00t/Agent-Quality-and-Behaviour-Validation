@@ -34,6 +34,7 @@ load_dotenv()  # load .env before reading any env vars
 # Set TRULENS_ENABLED=false or MLFLOW_ENABLED=false in the shell to override.
 os.environ.setdefault("TRULENS_ENABLED", "true")
 os.environ.setdefault("MLFLOW_ENABLED", "true")
+os.environ.setdefault("LANGFUSE_ANNOTATION_ENABLED", "false")
 
 from retail_support.config import SupportSettings
 from retail_support.runtime import RetailSupportOrchestrator, SupportReply

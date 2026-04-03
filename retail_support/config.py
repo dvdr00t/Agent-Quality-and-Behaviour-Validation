@@ -32,6 +32,10 @@ class SupportSettings:
     mlflow_enabled: bool = False
     mlflow_experiment_name: str = "retail-support-rag-eval"
     mlflow_tracking_uri: str | None = None
+    langfuse_annotation_queue_id: str | None = None
+    langfuse_annotation_enabled: bool = False
+    langfuse_annotation_threshold: float = 0.7
+    dspy_judge_path: str | None = None
 
     @classmethod
     def from_env(cls, model_name_override: str | None = None) -> "SupportSettings":
@@ -47,6 +51,10 @@ class SupportSettings:
         mlflow_enabled = os.getenv("MLFLOW_ENABLED", "false").lower() == "true"
         mlflow_experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "retail-support-rag-eval")
         mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+        langfuse_annotation_queue_id = os.getenv("LANGFUSE_ANNOTATION_QUEUE_ID")
+        langfuse_annotation_enabled = os.getenv("LANGFUSE_ANNOTATION_ENABLED", "false").lower() == "true"
+        langfuse_annotation_threshold = _read_float("LANGFUSE_ANNOTATION_THRESHOLD", 0.7)
+        dspy_judge_path = os.getenv("DSPY_JUDGE_PATH")
 
         if provider == "azure":
             azure_openai_api_key = _read_required_env("AZURE_OPENAI_API_KEY")
@@ -76,6 +84,10 @@ class SupportSettings:
                 mlflow_enabled=mlflow_enabled,
                 mlflow_experiment_name=mlflow_experiment_name,
                 mlflow_tracking_uri=mlflow_tracking_uri,
+                langfuse_annotation_queue_id=langfuse_annotation_queue_id,
+                langfuse_annotation_enabled=langfuse_annotation_enabled,
+                langfuse_annotation_threshold=langfuse_annotation_threshold,
+                dspy_judge_path=dspy_judge_path,
             )
 
         if provider != "openai":
@@ -97,6 +109,10 @@ class SupportSettings:
             mlflow_enabled=mlflow_enabled,
             mlflow_experiment_name=mlflow_experiment_name,
             mlflow_tracking_uri=mlflow_tracking_uri,
+            langfuse_annotation_queue_id=langfuse_annotation_queue_id,
+            langfuse_annotation_enabled=langfuse_annotation_enabled,
+            langfuse_annotation_threshold=langfuse_annotation_threshold,
+            dspy_judge_path=dspy_judge_path,
         )
 
 
