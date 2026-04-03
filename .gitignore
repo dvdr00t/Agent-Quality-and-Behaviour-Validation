@@ -18,3 +18,4 @@ agents-evaluations/
 .claude/settings.local.json
 *.sqlite
 *.db
+mlruns/
