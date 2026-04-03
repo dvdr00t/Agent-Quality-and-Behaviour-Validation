@@ -258,8 +258,10 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 ```bash
 python experiment_stage4.py
-mlflow ui --backend-store-uri sqlite:///mlflow.db   # view results
+mlflow ui --backend-store-uri sqlite:///mlflow.db   # view scores and traces
 ```
+
+View Langfuse traces and annotation queues at [cloud.langfuse.com](https://cloud.langfuse.com).
 
 **Set up Langfuse annotation queue** (one-time):
 
