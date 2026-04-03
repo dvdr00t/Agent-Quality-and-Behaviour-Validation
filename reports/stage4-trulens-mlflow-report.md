@@ -45,6 +45,8 @@ Two additional scorers run on top of the RAG Triad via `_log_extra_assessments` 
 
 **Why post-hoc rather than TruChain wrapping:** the app has four LangChain agents in a nested supervisor delegation pattern, with Langfuse callbacks already injected into `agent.invoke()`. Wrapping agents with `TruChain` would create a conflicting instrumentation stack. Calling the feedback functions directly after execution is cleaner and fits the existing architecture.
 
+**No TruLens UI in this project:** TruLens has its own Streamlit dashboard (`tru_session.run_dashboard()`) that displays per-record RAG Triad scores and a leaderboard. That dashboard is fed by `TruChain`-recorded runs — which this project does not use. Here, TruLens acts purely as a computation engine: scores are computed by its feedback functions and immediately forwarded to MLflow via `mlflow.log_feedback()`. The TruLens database stays empty and there is nothing to see in its dashboard. **MLflow is the UI for evaluation scores in this project.**
+
 **What TruLens uniquely provides:** the most actionable diagnostic framework for identifying *which component to fix* — retriever, LLM, or prompt.
 
 ### MLflow — Experiment tracking and judge alignment
