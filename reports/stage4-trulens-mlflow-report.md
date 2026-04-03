@@ -20,11 +20,26 @@ This is implemented with three tools, each handling a distinct part of the loop:
 
 ---
 
+## The application being evaluated
+
+The system under evaluation is a retail customer support agent built with LangChain. It has four specialist agents coordinated by a supervisor:
+
+- **Knowledge specialist** — answers policy and FAQ questions by searching a knowledge base
+- **Order specialist** — looks up orders, checks refund eligibility, creates escalation tickets
+- **Safety specialist** — detects prompt injection, data exfiltration, and policy bypass attempts
+- **Supervisor** — routes incoming questions to the right specialist
+
+The knowledge base is a **small, static dataset of 4 articles** (refund policy, shipping delays, warranty terms, privacy rules) stored in memory. Retrieval is done by **keyword matching** — the query and each article are tokenized, overlapping words are counted, and the top 2 articles are returned. There are no embeddings, no vector database, and no semantic search.
+
+This means the application follows the same **retrieve → generate** pattern as a production RAG system, but with a deliberately simple implementation. The evaluation tools (TruLens, Langfuse, MLflow) treat it the same way they would treat a real RAG pipeline — the diagnostics, scoring, and feedback loop all work identically. The small corpus does mean that out-of-scope questions (like "Do you offer free shipping?") will retrieve loosely related articles rather than finding nothing, because there are only 4 articles to choose from.
+
+---
+
 ## How it works
 
 ### Step 1: The agent answers a question
 
-When a customer asks something like *"What is the refund policy?"*, the agent searches the knowledge base, retrieves relevant articles, and generates a response. All of this is captured as a trace in both Langfuse and MLflow.
+When a customer asks a question, the supervisor routes it to the appropriate specialist. For knowledge questions like *"What is the refund policy?"*, the knowledge specialist searches the knowledge base, retrieves the most relevant articles, and generates a response grounded in what it found. All of this — the routing, retrieval, and generation — is captured as a trace in both Langfuse and MLflow.
 
 ### Step 2: TruLens scores the answer automatically
 
@@ -199,20 +214,44 @@ The judge alignment pipeline (`optimize_judge.py`) runs offline, separate from t
 
 ## Configuration
 
+All configuration is done through environment variables. There are three places where they can be set:
+
+1. **`.env` file** — for credentials and secrets. Loaded automatically by the experiment script. This is where you put values that don't change between runs.
+2. **`experiment_stage4.py` defaults** — the experiment script sets `TRULENS_ENABLED=true` and `MLFLOW_ENABLED=true` automatically so you don't have to. These can be overridden on the command line.
+3. **Command line** — for per-run overrides, e.g. `LANGFUSE_ANNOTATION_ENABLED=true python experiment_stage4.py`.
+
+**Credentials (set these in `.env`):**
+
+| Variable | What it does |
+|---|---|
+| `OPENAI_API_KEY` | Required. API key for the LLM |
+| `LANGFUSE_PUBLIC_KEY` | Enables Langfuse tracing. Required together with secret key |
+| `LANGFUSE_SECRET_KEY` | Langfuse authentication |
+| `LANGFUSE_BASE_URL` | Langfuse instance URL (e.g. `https://cloud.langfuse.com`) |
+
+**Evaluation settings (handled automatically, override if needed):**
+
+| Variable | Default | Where it's set | What it does |
+|---|---|---|---|
+| `TRULENS_ENABLED` | `true` | `experiment_stage4.py` | Enables RAG Triad scoring |
+| `MLFLOW_ENABLED` | `true` | `experiment_stage4.py` | Enables MLflow experiment tracking |
+| `MLFLOW_EXPERIMENT_NAME` | `retail-support-rag-eval` | code default | MLflow experiment name |
+| `MLFLOW_TRACKING_URI` | local SQLite | code default | Override to point to a remote MLflow server |
+| `TRULENS_FEEDBACK_MODEL` | same as app model | code default | Use a different LLM for judging |
+
+**Annotation queue (set on command line or in `.env` after running `setup_langfuse_scoring.py`):**
+
 | Variable | Default | What it does |
 |---|---|---|
-| `LANGFUSE_PUBLIC_KEY` | — | Enables Langfuse tracing (required with secret key) |
-| `LANGFUSE_SECRET_KEY` | — | Langfuse authentication |
-| `LANGFUSE_BASE_URL` | — | Langfuse instance URL |
-| `LANGFUSE_ANNOTATION_ENABLED` | `false` | Enables automatic routing of low-scoring traces to review queue |
-| `LANGFUSE_ANNOTATION_QUEUE_ID` | — | ID of the target annotation queue (from `setup_langfuse_scoring.py`) |
-| `LANGFUSE_ANNOTATION_THRESHOLD` | `0.7` | Traces with any RAG Triad score below this get flagged |
-| `TRULENS_ENABLED` | `false` | Enables RAG Triad evaluation (defaults to `true` in experiment script) |
-| `TRULENS_FEEDBACK_MODEL` | same as app model | Override the LLM used for judging |
-| `MLFLOW_ENABLED` | `false` | Enables MLflow experiment tracking (defaults to `true` in experiment script) |
-| `MLFLOW_EXPERIMENT_NAME` | `retail-support-rag-eval` | MLflow experiment name |
-| `MLFLOW_TRACKING_URI` | local SQLite | Remote MLflow server URI |
-| `DSPY_JUDGE_PATH` | — | Path to an optimised DSPy judge (from `optimize_judge.py`) |
+| `LANGFUSE_ANNOTATION_QUEUE_ID` | — | ID of the annotation queue. Printed by `setup_langfuse_scoring.py` |
+| `LANGFUSE_ANNOTATION_ENABLED` | `false` | Set to `true` to route low-scoring traces to the queue |
+| `LANGFUSE_ANNOTATION_THRESHOLD` | `0.7` | Flag traces with any RAG Triad score below this |
+
+**DSPy judge (set after running `optimize_judge.py`):**
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DSPY_JUDGE_PATH` | — | Path to the optimised judge artefact (e.g. `artifacts/optimized_judge.json`) |
 
 ---
 
