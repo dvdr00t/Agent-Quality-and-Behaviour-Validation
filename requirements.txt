@@ -2,3 +2,6 @@ langchain
 langchain-openai
 chainlit
 langfuse
+trulens-core>=2.7.1
+trulens-providers-openai>=2.7.1
+mlflow>=2.13

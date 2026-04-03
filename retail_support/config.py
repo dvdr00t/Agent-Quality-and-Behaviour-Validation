@@ -27,6 +27,11 @@ class SupportSettings:
     langfuse_secret_key: str | None = None
     langfuse_public_key: str | None = None
     langfuse_base_url: str | None = None
+    trulens_enabled: bool = False
+    trulens_feedback_model: str | None = None
+    mlflow_enabled: bool = False
+    mlflow_experiment_name: str = "retail-support-rag-eval"
+    mlflow_tracking_uri: str | None = None
 
     @classmethod
     def from_env(cls, model_name_override: str | None = None) -> "SupportSettings":
@@ -37,6 +42,11 @@ class SupportSettings:
         langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         langfuse_base_url = os.getenv("LANGFUSE_BASE_URL")
+        trulens_enabled = os.getenv("TRULENS_ENABLED", "false").lower() == "true"
+        trulens_feedback_model = os.getenv("TRULENS_FEEDBACK_MODEL")
+        mlflow_enabled = os.getenv("MLFLOW_ENABLED", "false").lower() == "true"
+        mlflow_experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "retail-support-rag-eval")
+        mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
 
         if provider == "azure":
             azure_openai_api_key = _read_required_env("AZURE_OPENAI_API_KEY")
@@ -61,6 +71,11 @@ class SupportSettings:
                 langfuse_secret_key=langfuse_secret_key,
                 langfuse_public_key=langfuse_public_key,
                 langfuse_base_url=langfuse_base_url,
+                trulens_enabled=trulens_enabled,
+                trulens_feedback_model=trulens_feedback_model,
+                mlflow_enabled=mlflow_enabled,
+                mlflow_experiment_name=mlflow_experiment_name,
+                mlflow_tracking_uri=mlflow_tracking_uri,
             )
 
         if provider != "openai":
@@ -77,6 +92,11 @@ class SupportSettings:
             langfuse_secret_key=langfuse_secret_key,
             langfuse_public_key=langfuse_public_key,
             langfuse_base_url=langfuse_base_url,
+            trulens_enabled=trulens_enabled,
+            trulens_feedback_model=trulens_feedback_model,
+            mlflow_enabled=mlflow_enabled,
+            mlflow_experiment_name=mlflow_experiment_name,
+            mlflow_tracking_uri=mlflow_tracking_uri,
         )
 
 

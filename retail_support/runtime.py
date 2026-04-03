@@ -23,6 +23,22 @@ try:
 except ImportError:
     _LANGFUSE_AVAILABLE = False
 
+try:
+    import mlflow
+
+    _MLFLOW_AVAILABLE = True
+except ImportError:
+    _MLFLOW_AVAILABLE = False
+
+try:
+    from trulens.core import TruSession
+    from trulens.providers.openai import AzureOpenAI as TruAzureOpenAI
+    from trulens.providers.openai import OpenAI as TruOpenAI
+
+    _TRULENS_AVAILABLE = True
+except ImportError:
+    _TRULENS_AVAILABLE = False
+
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +82,8 @@ class RetailSupportOrchestrator:
         self._active_session: SupportSession | None = None
         self._active_callbacks: list[Any] = []
         self._init_langfuse()
+        self._init_trulens()
+        self._init_mlflow()
         self.model = self._build_model()
         self._build_agents()
 
@@ -114,6 +132,16 @@ class RetailSupportOrchestrator:
         ]
         handled_by = TARGET_DISPLAY_NAMES[target]
         logger.info("Support request handled by %s with route=%s and tools=%s", handled_by, route, tool_calls)
+
+        context_chunks = [
+            event["details"]["result"]
+            for event in self._current_request_events
+            if event["kind"] == "tool"
+            and "result" in event["details"]
+            and event["name"] == "search_support_knowledge"
+        ]
+        self._run_trulens_eval(query=user_message, context_chunks=context_chunks, response=answer, target=target)
+
         return SupportReply(
             text=answer,
             handled_by=handled_by,
@@ -146,8 +174,9 @@ class RetailSupportOrchestrator:
         def search_support_knowledge(query: str) -> str:
             """Search internal support knowledge for policies, warranty, shipping, and FAQ content."""
             result = self.operations.search_support_knowledge(query=query)
-            self._record_event(kind="tool", actor="knowledge", name="search_support_knowledge", details={"query": query})
-            return json.dumps(result, indent=2)
+            serialised = json.dumps(result, indent=2)
+            self._record_event(kind="tool", actor="knowledge", name="search_support_knowledge", details={"query": query, "result": serialised})
+            return serialised
 
         @tool
         def get_order_snapshot(order_id: str) -> str:
@@ -184,8 +213,9 @@ class RetailSupportOrchestrator:
         def get_policy_summary(topic: str) -> str:
             """Return the most relevant privacy, refund, escalation, or security policy summary."""
             result = self.operations.get_policy_summary(topic=topic)
-            self._record_event(kind="tool", actor="safety", name="get_policy_summary", details={"topic": topic})
-            return json.dumps(result, indent=2)
+            serialised = json.dumps(result, indent=2)
+            self._record_event(kind="tool", actor="safety", name="get_policy_summary", details={"topic": topic, "result": serialised})
+            return serialised
 
         @tool
         def assess_request_risk(message: str) -> str:
@@ -354,6 +384,69 @@ class RetailSupportOrchestrator:
         if not self._langfuse_enabled:
             return []
         return [LangfuseCallbackHandler(public_key=self.settings.langfuse_public_key)]
+
+    def _init_trulens(self) -> None:
+        self._trulens_enabled = False
+        if not _TRULENS_AVAILABLE or not self.settings.trulens_enabled:
+            return
+
+        self._tru_session = TruSession()
+
+        judge_model = self.settings.trulens_feedback_model or self.settings.model_name
+
+        if self.settings.provider == "azure":
+            provider: TruOpenAI | TruAzureOpenAI = TruAzureOpenAI(
+                deployment_name=judge_model,
+                azure_endpoint=self.settings.azure_openai_endpoint,
+                api_key=self.settings.azure_openai_api_key,
+                api_version=self.settings.azure_openai_api_version,
+            )
+        else:
+            provider = TruOpenAI(model_engine=judge_model, api_key=self.settings.openai_api_key)
+
+        self._tru_provider = provider
+        self._trulens_enabled = True
+        logger.info("TruLens RAG Triad evaluation enabled (judge model: %s)", judge_model)
+
+    def _init_mlflow(self) -> None:
+        self._mlflow_enabled = False
+        if not _MLFLOW_AVAILABLE or not self.settings.mlflow_enabled:
+            return
+        if self.settings.mlflow_tracking_uri:
+            mlflow.set_tracking_uri(self.settings.mlflow_tracking_uri)
+        mlflow.set_experiment(self.settings.mlflow_experiment_name)
+        self._mlflow_enabled = True
+        logger.info("MLflow experiment tracking enabled (experiment: %s)", self.settings.mlflow_experiment_name)
+
+    def _run_trulens_eval(self, query: str, context_chunks: list[str], response: str, target: str = "") -> None:
+        if not self._trulens_enabled or not context_chunks:
+            return
+        try:
+            context_str = "\n\n---\n\n".join(context_chunks)
+            cr_score, cr_reasons = self._tru_provider.context_relevance_with_cot_reasons(
+                question=query, context=context_str
+            )
+            gr_score, gr_reasons = self._tru_provider.groundedness_measure_with_cot_reasons(
+                source=context_str, statement=response
+            )
+            ar_score, ar_reasons = self._tru_provider.relevance_with_cot_reasons(
+                prompt=query, response=response
+            )
+            logger.info(
+                "TruLens RAG Triad — context_relevance=%.2f groundedness=%.2f answer_relevance=%.2f",
+                cr_score,
+                gr_score,
+                ar_score,
+            )
+            if self._mlflow_enabled:
+                with mlflow.start_run():
+                    mlflow.log_param("query", query[:256])
+                    mlflow.log_param("target_agent", target)
+                    mlflow.log_metric("context_relevance", cr_score)
+                    mlflow.log_metric("groundedness", gr_score)
+                    mlflow.log_metric("answer_relevance", ar_score)
+        except Exception:
+            logger.exception("TruLens evaluation failed — continuing without scores")
 
     def _get_agent(self, target: str) -> Any:
         if target == "supervisor":
