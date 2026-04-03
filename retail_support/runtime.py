@@ -140,7 +140,8 @@ class RetailSupportOrchestrator:
             and "result" in event["details"]
             and event["name"] == "search_support_knowledge"
         ]
-        self._run_trulens_eval(query=user_message, context_chunks=context_chunks, response=answer, target=target)
+        last_trace_id = mlflow.get_last_active_trace_id() if self._mlflow_enabled else None
+        self._run_trulens_eval(query=user_message, context_chunks=context_chunks, response=answer, target=target, trace_id=last_trace_id)
 
         return SupportReply(
             text=answer,
@@ -419,7 +420,14 @@ class RetailSupportOrchestrator:
         self._mlflow_enabled = True
         logger.info("MLflow experiment tracking enabled (experiment: %s)", self.settings.mlflow_experiment_name)
 
-    def _run_trulens_eval(self, query: str, context_chunks: list[str], response: str, target: str = "") -> None:
+    def _run_trulens_eval(
+        self,
+        query: str,
+        context_chunks: list[str],
+        response: str,
+        target: str = "",
+        trace_id: str | None = None,
+    ) -> None:
         if not self._trulens_enabled or not context_chunks:
             return
         try:
@@ -446,8 +454,68 @@ class RetailSupportOrchestrator:
                     mlflow.log_metric("context_relevance", cr_score)
                     mlflow.log_metric("groundedness", gr_score)
                     mlflow.log_metric("answer_relevance", ar_score)
+                if trace_id:
+                    self._log_trulens_assessments(
+                        trace_id=trace_id,
+                        cr_score=cr_score,
+                        cr_reasons=cr_reasons,
+                        gr_score=gr_score,
+                        gr_reasons=gr_reasons,
+                        ar_score=ar_score,
+                        ar_reasons=ar_reasons,
+                    )
         except Exception:
             logger.exception("TruLens evaluation failed — continuing without scores")
+
+    def _log_trulens_assessments(
+        self,
+        trace_id: str,
+        cr_score: float,
+        cr_reasons: dict[str, Any],
+        gr_score: float,
+        gr_reasons: dict[str, Any],
+        ar_score: float,
+        ar_reasons: dict[str, Any],
+    ) -> None:
+        """Log TruLens RAG Triad scores as MLflow trace assessments (visible in the Quality tab)."""
+        try:
+            from mlflow.entities import AssessmentSource, AssessmentSourceType
+
+            judge_model = self.settings.trulens_feedback_model or self.settings.model_name
+            source = AssessmentSource(
+                source_type=AssessmentSourceType.LLM_JUDGE,
+                source_id=f"trulens/{judge_model}",
+            )
+
+            def _rationale(reasons: dict[str, Any]) -> str | None:
+                if isinstance(reasons, dict):
+                    return reasons.get("reason") or reasons.get("reasons") or None
+                return str(reasons) if reasons else None
+
+            mlflow.log_feedback(
+                trace_id=trace_id,
+                name="context_relevance",
+                value=cr_score,
+                source=source,
+                rationale=_rationale(cr_reasons),
+            )
+            mlflow.log_feedback(
+                trace_id=trace_id,
+                name="groundedness",
+                value=gr_score,
+                source=source,
+                rationale=_rationale(gr_reasons),
+            )
+            mlflow.log_feedback(
+                trace_id=trace_id,
+                name="relevance",
+                value=ar_score,
+                source=source,
+                rationale=_rationale(ar_reasons),
+            )
+            logger.info("MLflow trace assessments logged for trace %s", trace_id)
+        except Exception:
+            logger.exception("Failed to log MLflow trace assessments — continuing without")
 
     def _get_agent(self, target: str) -> Any:
         if target == "supervisor":
