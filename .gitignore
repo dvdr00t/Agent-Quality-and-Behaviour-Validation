@@ -16,3 +16,5 @@ build/
 dist/
 agents-evaluations/
 .claude/settings.local.json
+*.sqlite
+*.db
