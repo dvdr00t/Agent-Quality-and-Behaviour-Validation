@@ -415,6 +415,7 @@ class RetailSupportOrchestrator:
         if self.settings.mlflow_tracking_uri:
             mlflow.set_tracking_uri(self.settings.mlflow_tracking_uri)
         mlflow.set_experiment(self.settings.mlflow_experiment_name)
+        mlflow.langchain.autolog(log_traces=True, silent=True)
         self._mlflow_enabled = True
         logger.info("MLflow experiment tracking enabled (experiment: %s)", self.settings.mlflow_experiment_name)
 
