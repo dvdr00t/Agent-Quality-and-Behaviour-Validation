@@ -26,6 +26,15 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()  # load .env before reading any env vars
+
+# Default both evaluation tools to on for the experiment.
+# Set TRULENS_ENABLED=false or MLFLOW_ENABLED=false in the shell to override.
+os.environ.setdefault("TRULENS_ENABLED", "true")
+os.environ.setdefault("MLFLOW_ENABLED", "true")
+
 from retail_support.config import SupportSettings
 from retail_support.runtime import RetailSupportOrchestrator, SupportReply
 

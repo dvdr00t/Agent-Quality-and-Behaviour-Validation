@@ -107,9 +107,9 @@ experiment_stage4.py (wraps reply())
 | `LANGFUSE_PUBLIC_KEY` | — | Enable Langfuse tracing |
 | `LANGFUSE_SECRET_KEY` | — | Langfuse auth |
 | `LANGFUSE_BASE_URL` | — | Langfuse instance URL |
-| `TRULENS_ENABLED` | `false` | Enable RAG Triad evaluation |
+| `TRULENS_ENABLED` | `false` (`true` in experiment script) | Enable RAG Triad evaluation |
 | `TRULENS_FEEDBACK_MODEL` | app model | Override judge LLM |
-| `MLFLOW_ENABLED` | `false` | Enable experiment tracking |
+| `MLFLOW_ENABLED` | `false` (`true` in experiment script) | Enable experiment tracking |
 | `MLFLOW_EXPERIMENT_NAME` | `retail-support-rag-eval` | MLflow experiment name |
 | `MLFLOW_TRACKING_URI` | local SQLite (`mlflow.db`) | Remote MLflow server URI |
 
@@ -162,12 +162,33 @@ Thirteen queries were run with all three tools enabled, spanning four categories
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+```
 
-# Run the experiment
-OPENAI_API_KEY=... TRULENS_ENABLED=true MLFLOW_ENABLED=true python experiment_stage4.py
+Add credentials to `.env` in the project root (create if it doesn't exist):
 
-# View MLflow results
+```
+OPENAI_API_KEY=sk-...
+
+# Optional — enables Langfuse tracing
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+```
+
+`TRULENS_ENABLED` and `MLFLOW_ENABLED` default to `true` inside the experiment script, so no extra flags are needed:
+
+```bash
+# Run the experiment — reads .env automatically
+python experiment_stage4.py
+
+# View MLflow Quality tab and traces
 mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+To disable a tool for a single run:
+
+```bash
+TRULENS_ENABLED=false python experiment_stage4.py
 ```
 
 Smoke tests (no API key needed):
