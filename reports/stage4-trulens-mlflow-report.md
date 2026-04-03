@@ -108,6 +108,33 @@ The optimised judge can then be loaded at runtime, so future automated evaluatio
                                      Better automated scores
 ```
 
+### What human review can and cannot fix
+
+Human review produces two kinds of insight, and they lead to very different actions.
+
+**Outcome 1: The judge was wrong — the agent was fine.**
+
+A customer asks *"What is the warranty for refurbished devices?"* The agent responds: *"Refurbished devices have a 90-day warranty that covers hardware defects but not accidental damage."* This is correct — it closely matches the knowledge base article.
+
+But TruLens scores groundedness at 0.5. Its judge prompt is overly strict about paraphrasing: the knowledge base says "90-day limited warranty" and the agent said "90-day warranty", so the judge penalises it.
+
+A human reviewer scores accuracy at 0.95 — the answer is essentially right. That gap between 0.5 and 0.95 becomes training data for DSPy. The optimisation pipeline rewrites the judge prompt to be more tolerant of semantically equivalent paraphrasing. Next time, the automated judge scores it correctly without human help.
+
+Nothing in the application changes. The agent was already doing a good job — the judge just couldn't tell. **This is the outcome that the feedback loop automates.**
+
+**Outcome 2: The agent was wrong — the judge was right.**
+
+A customer asks *"Do you offer free shipping?"* The knowledge base has no article about free shipping, but the keyword retriever returns the "Shipping delays and escalation" article because the word "shipping" matches. The agent reads that article and responds: *"We offer shipping via DHL, UPS, and FedEx"* — which doesn't answer the question.
+
+TruLens scores Context Relevance low (the retrieved article is about delays, not shipping costs) and Answer Relevance low (the response doesn't address free shipping). A human reviewer confirms: accuracy 0.3, the agent should have said *"I don't have information about free shipping."*
+
+The judge was right. The problem is in the application itself. Possible fixes:
+- **Add a shipping costs article** to the knowledge base — a content change
+- **Improve the retriever** to recognise when nothing relevant was found — a retrieval logic change
+- **Adjust the agent prompt** to say "if the retrieved content doesn't answer the question, say so" — a prompt change
+
+None of these can be done by DSPy or Langfuse. They require an engineer to decide what to fix and make the change. **The feedback loop identifies and confirms the problem, but fixing the application is manual work.**
+
 ---
 
 ## Why these three tools?
