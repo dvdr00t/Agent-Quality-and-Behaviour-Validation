@@ -111,10 +111,15 @@ class RetailSupportOrchestrator:
                 ):
                     with self._langfuse_client.start_as_current_observation(
                         name=f"retail-support-{target}",
+                        input={"query": user_message},
                         metadata={"target": target},
                     ):
                         self._langfuse_trace_id = self._langfuse_client.get_current_trace_id()
-                        return self._execute_reply(session, user_message, target)
+                        reply = self._execute_reply(session, user_message, target)
+                        self._langfuse_client.update_current_span(
+                            output={"response": reply.text},
+                        )
+                        return reply
             else:
                 self._langfuse_trace_id = None
                 return self._execute_reply(session, user_message, target)
@@ -498,7 +503,10 @@ class RetailSupportOrchestrator:
 
             def _rationale(reasons: dict[str, Any]) -> str | None:
                 if isinstance(reasons, dict):
-                    return reasons.get("reason") or reasons.get("reasons") or None
+                    value = reasons.get("reason") or reasons.get("reasons") or None
+                    if isinstance(value, (list, dict)):
+                        return str(value)
+                    return value
                 return str(reasons) if reasons else None
 
             mlflow.log_feedback(

@@ -137,21 +137,50 @@ None of these can be done by DSPy or Langfuse. They require an engineer to decid
 
 ---
 
-## Why these three tools?
+## Tool comparison
 
-Each tool was chosen because it is the best at one specific job. No two overlap.
+The goal of this stage is to explore Langfuse, TruLens, and MLflow and understand what each brings to the table. They overlap significantly — all three can capture traces, store scores, and display results in a dashboard. The table below maps out where they overlap and where each has unique strengths.
 
-| What | Tool | Why this one |
-|---|---|---|
-| Human review | Langfuse | Most mature annotation queue workflow with team assignment and structured scoring |
-| Automated quality scoring | TruLens | RAG Triad is the most actionable diagnostic framework for pinpointing failures |
-| Experiment tracking + judge alignment | MLflow | Only tool that supports DSPy-based judge optimisation from human feedback |
+### Feature comparison
 
-**Langfuse** captures every agent execution as a browsable trace and provides the annotation queues where humans review flagged responses. It does not compute quality scores.
+| Capability | Langfuse | TruLens | MLflow |
+|---|---|---|---|
+| **Trace capture** | Yes — LangChain callback integration, full span tree | Yes — TruSession records calls and contexts | Yes — `mlflow.langchain.autolog()` captures runs |
+| **Dashboard / UI** | Yes — trace explorer, session view, cost tracking | Yes — TruLens Console with leaderboard and feedback drill-down | Yes — run explorer, Quality tab, Charts tab |
+| **LLM-as-judge scoring** | No — stores scores, does not compute them | Yes — feedback functions with chain-of-thought rationales | No — stores scores, does not compute them |
+| **RAG-specific diagnostics** | No | Yes — RAG Triad (Context Relevance, Groundedness, Answer Relevance) | No |
+| **Human review workflow** | Yes — annotation queues with team assignment, structured score configs, queue status tracking | No | No |
+| **Score storage** | Yes — numeric and categorical scores on traces | Yes — feedback results with rationales | Yes — assessments on traces with rationales |
+| **Experiment organisation** | Limited — projects and tags | Limited — apps and feedback history | Yes — experiments, runs, parameters, metrics, artifacts |
+| **DSPy integration** | No | No | Yes — `mlflow.dspy.autolog()`, artifact logging for optimised judges |
+| **Model registry** | No | No | Yes — model versioning, staging, deployment |
+| **Cost tracking** | Yes — token counts and cost per trace | Limited — tracks token usage | No |
+| **Custom feedback functions** | No | Yes — extensible feedback function framework | No |
+| **Remote / hosted option** | Yes — Langfuse Cloud or self-hosted | Local only (console) | Yes — remote tracking server or managed (Databricks) |
 
-**TruLens** computes quality scores using LLM-as-judge feedback functions. It does not have a UI in this project — its scores are forwarded to MLflow for display. TruLens acts purely as a scoring engine.
+### What is unique to each
 
-**MLflow** stores and displays all scores (Quality tab, Charts tab), captures full execution traces via autolog, and tracks the DSPy judge alignment pipeline. It does not compute scores itself.
+**Langfuse** has the most mature human-in-the-loop review workflow. Annotation queues, structured scoring dimensions (numeric and categorical), reviewer assignment, and queue status management are more developed than anything in TruLens or MLflow. It also provides the richest trace exploration UI with cost tracking per call. Langfuse does have its own evaluation features (online evals, custom scoring), but its annotation queue workflow is what sets it apart.
+
+**TruLens** has the strongest automated scoring framework. Its RAG Triad is specifically designed to diagnose *where* a RAG pipeline failed — retrieval, grounding, or relevance — rather than just reporting a single quality number. The chain-of-thought feedback functions explain *why* each score was given, which is valuable for debugging. It also supports pluggable providers (OpenAI, Azure OpenAI, etc.) so the judge model can differ from the application model. Other tools can store and display scores, but TruLens is the most opinionated about how to compute them for RAG systems.
+
+**MLflow** has the broadest experiment lifecycle management. It provides the structure for comparing runs across parameter changes, storing artifacts (like optimised judge programs), and integrating with DSPy for judge alignment. Its trace assessment API also lets you attach scores with rationales to autologged traces, making it a natural central dashboard when scores come from multiple sources. Neither Langfuse nor TruLens offer comparable experiment organisation or optimisation tracking.
+
+### Where they overlap — and how we resolved it
+
+**Tracing.** All three capture execution traces. In this project, Langfuse and MLflow both trace the same LangChain calls. This is intentional: Langfuse traces feed the annotation queue workflow, while MLflow traces receive quality assessments. TruLens tracing is not used — it acts purely as a scoring engine.
+
+**Score storage.** All three can store scores, but they serve different audiences. TruLens stores scores internally as feedback results. MLflow stores them as trace assessments visible in the Quality tab. Langfuse stores human-provided scores from annotation queues. The scores flow in one direction: TruLens computes → MLflow displays → low scores trigger Langfuse review → human scores feed back into DSPy via MLflow.
+
+**Dashboards.** All three have UIs, but they show different things. The MLflow UI is the primary dashboard for this project (quality scores, experiment comparison, charts). The Langfuse UI is used for trace exploration and human review. The TruLens Console is not used — its scores are forwarded to MLflow instead.
+
+### How each tool is used in this project
+
+| Tool | Primary role | What it does here | What it does NOT do here |
+|---|---|---|---|
+| **Langfuse** | Human review | Captures traces, routes low-scoring ones to annotation queues, stores human scores | Does not compute automated scores, not used as the primary dashboard |
+| **TruLens** | Automated scoring | Computes RAG Triad scores with rationales via LLM-as-judge | Does not trace the application, does not display results (no UI used) |
+| **MLflow** | Experiment tracking + judge alignment | Stores all scores, displays them in the UI, tracks DSPy optimisation runs | Does not compute scores, does not manage human review |
 
 ---
 
