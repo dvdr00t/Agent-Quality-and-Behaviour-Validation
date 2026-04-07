@@ -12,7 +12,22 @@ dependencies = [
   "langchain",
   "langchain-openai",
   "chainlit",
+  "mlflow",
+  "pytest",
+  "pytest-xdist",
+  "deepeval",
+  "ragas",
+]
+
+[project.optional-dependencies]
+eval = [
+  "mlflow",
+  "pytest",
+  "pytest-xdist",
+  "deepeval",
+  "ragas",
 ]
 
 [project.scripts]
 retail-support = "retail_support.app:main"
+retail-support-stage1 = "retail_support.stage1_eval:main"

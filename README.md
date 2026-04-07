@@ -38,6 +38,9 @@ This view focuses only on the available agents and their delegation relationship
 - [`retail_support/services.py`](retail_support/services.py) — retail support business operations
 - [`retail_support/runtime.py`](retail_support/runtime.py) — multi-agent orchestration and session handling
 - [`retail_support/app.py`](retail_support/app.py) — CLI application logic
+- [`retail_support/stage1_eval.py`](retail_support/stage1_eval.py) — Stage 1 evaluation harness for DeepEval, Ragas, and MLflow
+- [`tests/test_stage1_deepeval.py`](tests/test_stage1_deepeval.py) — pytest/DeepEval regression checks for Stage 1
+- [`reports/stage1-evaluation-report.md`](reports/stage1-evaluation-report.md) — generated Stage 1 markdown report
 
 ## Requirements
 
@@ -122,6 +125,37 @@ chainlit run chainlit_app.py
 ```
 
 Inside the UI you can switch the active subsystem with the same `/agent ...` commands.
+
+## Stage 1 evaluation stack
+
+The repository now includes a Stage 1 evaluation workflow aligned to the development-testing architecture:
+- [`DeepEval`](tests/test_stage1_deepeval.py) for pytest-native regression checks
+- [`Ragas`](retail_support/stage1_eval.py) for synthetic dataset generation from the in-repo knowledge base
+- [`MLflow`](retail_support/stage1_eval.py) for experiment tracking and artifact logging
+
+Install the Stage 1 dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the curated DeepEval suite:
+
+```bash
+pytest tests/test_stage1_deepeval.py -q
+```
+
+Run the full Stage 1 workflow with report generation:
+
+```bash
+python -m retail_support.stage1_eval
+```
+
+Generated artifacts:
+- [`artifacts/stage1/stage1_curated_results.json`](artifacts/stage1/stage1_curated_results.json)
+- [`artifacts/stage1/ragas_synthetic_dataset.json`](artifacts/stage1/ragas_synthetic_dataset.json)
+- [`reports/stage1-evaluation-report.md`](reports/stage1-evaluation-report.md)
+- [`mlruns/`](mlruns/)
 
 ## Production-like characteristics
 

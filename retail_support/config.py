@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 DEFAULT_PROVIDER = "openai"
+_ENV_LOADED = False
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,8 @@ class SupportSettings:
 
     @classmethod
     def from_env(cls, model_name_override: str | None = None) -> "SupportSettings":
-        provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER).strip().lower()
+        _load_local_env_file()
+        provider = _detect_provider()
         temperature = _read_float("OPENAI_TEMPERATURE", 0.0)
         request_timeout_seconds = _read_float("OPENAI_TIMEOUT_SECONDS", 60.0)
         max_retries = _read_int("OPENAI_MAX_RETRIES", 2)
@@ -66,6 +69,39 @@ class SupportSettings:
             max_retries=max_retries,
             openai_api_key=openai_api_key,
         )
+
+
+def _load_local_env_file() -> None:
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        _ENV_LOADED = True
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+    _ENV_LOADED = True
+
+
+def _detect_provider() -> str:
+    explicit_provider = os.getenv("LLM_PROVIDER")
+    if explicit_provider:
+        return explicit_provider.strip().lower()
+
+    if os.getenv("AZURE_OPENAI_API_KEY") and os.getenv("AZURE_OPENAI_ENDPOINT"):
+        return "azure"
+
+    return DEFAULT_PROVIDER
 
 
 def _read_required_env(name: str) -> str:
