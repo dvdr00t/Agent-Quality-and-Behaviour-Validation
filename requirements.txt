@@ -1,3 +1,9 @@
 langchain
 langchain-openai
 chainlit
+
+# Stage 2 — Pre-deployment red-teaming and safety evaluation
+fastapi
+uvicorn[standard]
+httpx
+inspect-ai

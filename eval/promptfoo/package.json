@@ -1,0 +1,13 @@
+{
+  "name": "retail-support-redteam",
+  "version": "1.0.0",
+  "description": "promptfoo red-team evaluation for the Retail Support multi-agent system",
+  "scripts": {
+    "redteam": "promptfoo redteam run",
+    "report": "promptfoo redteam report",
+    "eval": "promptfoo eval"
+  },
+  "devDependencies": {
+    "promptfoo": "^0.103.0"
+  }
+}
