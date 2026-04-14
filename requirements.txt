@@ -1,3 +1,9 @@
 langchain
 langchain-openai
 chainlit
+deepeval
+deepteam
+inspect-ai
+pytest
+pytest-asyncio
+mlflow
