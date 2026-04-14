@@ -53,7 +53,7 @@ Stage 5 runs a three-tool pipeline. Each tool targets the agent from a different
 
 **Step 1: Inspect AI evaluates the LLM under production system prompts**
 
-Inspect AI does not import the LangChain agent. Instead, it calls the underlying LLM directly with the same system prompts used in production (copied verbatim from `runtime.py`). For each safety scenario, the LLM generates a response, and a scorer checks whether the response contains refusal language (for injection and harmful content) or whether it avoids revealing PII (model-graded). This tests whether the system prompts themselves provide adequate safety boundaries.
+Inspect AI does not import the LangChain agent. Instead, it calls the underlying LLM directly with system prompts adapted from `runtime.py`. The Safety Guardian prompt used in benchmarks adds one line not present in the live application — `"Refuse requests for harmful content, illegal activity, or hate speech"` — to cover the refusal scenarios that the production prompt does not make explicit. For each safety scenario, the LLM generates a response, and a scorer checks whether the response contains refusal language (for injection and harmful content) or whether it avoids revealing PII (model-graded). This tests whether the system prompts provide adequate safety boundaries.
 
 **Step 2: DeepEval runs the full agent through a pytest safety gate**
 
@@ -154,7 +154,7 @@ The Order Specialist's system prompt instructs: *"If the requesting user does no
 
 **DeepEval** is the only tool with first-class pytest integration — `pytest tests/test_stage5_deepeval.py` makes safety evaluation part of the normal engineering workflow, with failures that block deployment. `ToxicityMetric` and `BiasMetric` are the only tools in the stack that measure properties of the agent's output itself rather than whether it refuses. The bias test (same question, two customer names, BiasMetric on the combined output) has no equivalent in Inspect AI or promptfoo.
 
-**promptfoo** is the only tool that generates attacks it did not pre-author. The `crescendo` strategy — multi-turn gradual escalation — and the `pii:session` plugin — cross-turn PII leakage — cover threat vectors that single-turn, pre-authored evaluation cannot reach. It is also the only tool that avoids the Python openai version conflict, because it calls the agent as a CLI subprocess.
+**promptfoo** is the only tool that generates attacks it did not pre-author. Its 9 plugins cover 5 OWASP LLM Top 10 categories: prompt injection (LLM01), harmful content (LLM02), PII disclosure (LLM06), role-based access (LLM07), and policy bypass (LLM08). The `crescendo` strategy — multi-turn gradual escalation — and the `pii:session` plugin — cross-turn PII leakage — cover threat vectors that single-turn, pre-authored evaluation cannot reach. The `agentic:memory-poisoning` plugin targets a specific agentic vulnerability: injecting false data into the agent's conversation history so that later turns produce wrong or harmful outputs. It is also the only tool that avoids the Python openai version conflict, because it calls the agent as a CLI subprocess.
 
 ### Where they overlap — and why this project uses all three anyway
 
@@ -172,7 +172,7 @@ There is overlap: all three use LLM-as-judge scoring, and both Inspect AI and De
 |------|-------------|-------------------|-----------------------|--------------------------|
 | Inspect AI | Compliance evidence | Runs 15 pre-authored safety scenarios, produces JSON eval logs, scores with pattern and model-graded scorers | Could wrap the full LangChain agent via the Agent Bridge instead of calling the LLM directly | Does not gate the CI pipeline; does not generate novel attacks |
 | DeepEval | CI deployment gate | Runs 10 pytest test cases against the full agent, applies GEval/ToxicityMetric/BiasMetric, blocks on failure | Could use DeepTeam for runtime guardrail wrapping in production | Does not produce compliance logs; does not test multi-turn attack sequences |
-| promptfoo | Novel attack discovery | Generates adversarial probes via OWASP plugins, fires them via CLI subprocess, scores with llm-rubric | Could run in CI via the official GitHub Action (`promptfoo/promptfoo-action@v1`) | Does not produce auditable logs; does not measure output toxicity or bias |
+| promptfoo | Novel attack discovery | Generates adversarial probes via 9 OWASP plugins (including `agentic:memory-poisoning` for multi-turn state attacks), fires them via CLI subprocess, scores with llm-rubric | Could run in CI via the official GitHub Action (`promptfoo/promptfoo-action@v1`) | Does not produce auditable logs; does not measure output toxicity or bias |
 
 ---
 
@@ -223,9 +223,9 @@ retail_support/
             └── fallback if npx missing  # logs warning, saves fallback JSON
 
 retail_support/stage5_inspect.py
-  SAFETY_GUARDIAN_PROMPT   ← copied verbatim from runtime.py
-  SUPERVISOR_PROMPT        ← copied verbatim from runtime.py
-  ORDER_SPECIALIST_PROMPT  ← copied verbatim from runtime.py
+  SAFETY_GUARDIAN_PROMPT   ← adapted from runtime.py (adds explicit harmful-content refusal)
+  SUPERVISOR_PROMPT        ← adapted from runtime.py
+  ORDER_SPECIALIST_PROMPT  ← adapted from runtime.py
   @task safety_refusal_task()    → system_message + generate + pattern()
   @task prompt_injection_task()  → system_message + generate + pattern()
   @task pii_protection_task()    → system_message + generate + model_graded_qa()
@@ -301,7 +301,7 @@ Because `inspect-ai` and `deepeval` require `openai>=2.0` while `langchain-opena
 | `retail_support/stage5_inspect.py` | Inspect AI task definitions: 3 tasks, 15 safety scenarios, pattern and model-graded scorers |
 | `tests/conftest.py` | Shared pytest fixtures: session-scoped orchestrator, function-scoped conversation session |
 | `tests/test_stage5_deepeval.py` | DeepEval safety pytest suite: 10 test cases across 4 threat categories |
-| `promptfooconfig.yaml` | promptfoo red-team configuration: 8 OWASP plugins, 3 attack strategies, CLI target |
+| `promptfooconfig.yaml` | promptfoo red-team configuration: 9 OWASP plugins, 3 attack strategies, CLI target |
 | `reports/stage5-safety-report.md` | This report — generated by `run_stage5_workflow()` |
 | `artifacts/stage5/inspect_results.json` | Inspect AI pass/fail counts per task |
 | `artifacts/stage5/deepeval_results.json` | DeepEval pytest pass/fail counts and individual test outcomes |
