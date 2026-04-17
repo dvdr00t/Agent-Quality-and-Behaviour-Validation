@@ -304,11 +304,9 @@ Analytically, Stage 3 is now better understood as an explicitly documented produ
 That said, the evidence remains stronger on architecture than on deployed operations. The available material does not include live telemetry dashboards, production alert histories, long-run drift baselines, or screenshots from an active monitoring environment. Stage 3 is therefore best understood as well documented at the architectural level and partially evidenced in code, but not yet demonstrated as a mature production deployment.
 
 ### 5.4 Stage 4 — Human review and continuous improvement
+Stage 4 integrates Langfuse, MLflow, and TruLens into a concrete human review and continuous improvement workflow. At its foundation, [SupportOperationsService.create_escalation_ticket()](retail_support/services.py:77) in [retail_support/services.py](retail_support/services.py) creates a structured handoff object with an identifier, topic, summary, status, and service-level expectation.
 
-Stage 4 in the five-stage architecture combines Langfuse, MLflow, and TruLens for human review and continuous improvement. The Stage 4 report documents a full feedback loop in which automated scoring identifies weak traces, Langfuse routes them for structured review, and MLflow tracks the resulting judgments and optimization runs. The repository also contains a concrete handoff primitive in [SupportOperationsService.create_escalation_ticket()](retail_support/services.py:77), and the knowledge base encodes escalation logic in [retail_support/data.py](retail_support/data.py:15) and [retail_support/data.py:55].
-
-The escalation payload is also structurally concrete:
-
+The escalation payload is structurally concrete:
 ```python
 def create_escalation_ticket(self, user_id: str, topic: str, summary: str) -> dict[str, Any]:
     self.ticket_counter += 1
@@ -322,9 +320,10 @@ def create_escalation_ticket(self, user_id: str, topic: str, summary: str) -> di
     }
 ```
 
-This supports a stronger claim than a simple handoff precursor. The stage report describes annotation queues, structured reviewer scoring dimensions, automated flagging thresholds, and DSPy-based judge alignment, all tied to Langfuse and MLflow. In other words, Stage 4 is not just conceptually present; it is described as an operational review-and-improvement loop.
+Beyond this handoff object, the branch implements three integrated evaluation layers. TruLens computes RAG Triad scores (context relevance, groundedness, answer relevance) as a scoring library. These scores flow into MLflow as run-level metrics and trace-level assessments visible in the Quality tab. When any score falls below a configurable threshold, `_maybe_flag_for_review()` in `retail_support/runtime.py` automatically routes the trace to a Langfuse annotation queue (retail-support-review) for human scoring on accuracy, policy compliance, and tone.
 
-The remaining limitation is not the absence of a review workflow, but the maturity of that workflow. The reported experiment used a small evaluation set and a compact judge-alignment dataset, so the main open question is scale and stability rather than existence.
+Completed annotations are captured via langfuse_annotations.py as `AnnotatedTrace` objects, which feed into a DSPy judge alignment pipeline (`optimize_judge.py`) that trains an optimized LLM judge against human labels and logs alignment results back to MLflow.
+This is sufficient to say the code implements automated quality gating, a reviewer queue with label capture, and a closed-loop judge optimization workflow. It does not yet implement multi-reviewer adjudication, dynamic reviewer assignment, or workload balancing — the current model assumes a single reviewer per trace.
 
 ### 5.5 Stage 5 — Safety assurance and compliance
 
